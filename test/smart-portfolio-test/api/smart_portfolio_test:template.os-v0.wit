@@ -1,0 +1,5 @@
+world smart-portfolio-test-template-dot-os-v0 {
+    import smart-portfolio;
+    import tester;
+    include process-v1;
+}

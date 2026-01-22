@@ -1,0 +1,27 @@
+interface smart-portfolio {
+    variant request {
+        send(send-request),
+        /// history of smart-portfolio with given node
+        history(string),
+    }
+
+    variant response {
+        send,
+        history(list<smart-portfolio-message>),
+    }
+
+    record send-request {
+        target: string,
+        message: string,
+    }
+
+    record smart-portfolio-message {
+        author: string,
+        content: string,
+    }
+}
+
+world smart-portfolio-template-dot-os-v0 {
+    import smart-portfolio;
+    include process-v1;
+}

@@ -1,0 +1,18 @@
+{
+    "name": "Smart Portfolio",
+    "description": "A local-first crypto portfolio tracker with Holdings and Exposure views. Track your positions, monitor PnL, and understand your real asset exposure.",
+    "image": "",
+    "properties": {
+        "package_name": "smart-portfolio",
+        "current_version": "0.1.0",
+        "publisher": "template.os",
+        "mirrors": [],
+        "code_hashes": {
+            "0.1.0": ""
+        },
+        "wit_version": 1,
+        "dependencies": []
+    },
+    "external_url": "",
+    "animation_url": ""
+}

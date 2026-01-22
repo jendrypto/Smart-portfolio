@@ -1,0 +1,15 @@
+[
+    {
+        "process_name": "smart-portfolio-test",
+        "process_wasm_path": "/smart-portfolio-test.wasm",
+        "on_exit": "Restart",
+        "request_networking": false,
+        "request_capabilities": [
+            "smart-portfolio:smart-portfolio:template.os"
+        ],
+        "grant_capabilities": [
+            "smart-portfolio:smart-portfolio:template.os"
+        ],
+        "public": true
+    }
+]
