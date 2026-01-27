@@ -8,11 +8,11 @@
         "publisher": "template.os",
         "mirrors": [],
         "code_hashes": {
-            "0.1.0": ""
+            "0.1.0": "bb8cae47958cd42e3cd393154a57a1ca649ccc9fe189c14e7512e3cd9fddedff"
         },
         "wit_version": 1,
         "dependencies": []
     },
-    "external_url": "",
+    "external_url": "https://github.com/smgreiner9-creator/Smart-portfolio",
     "animation_url": ""
 }
