@@ -753,6 +753,177 @@ GET /api/dex/token/:address
 
 ---
 
+## Wallet API
+
+### Scan Wallet
+
+Scan an EVM wallet address for token balances across selected chains.
+
+```http
+POST /api/wallet/scan
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "address": "0x1234567890abcdef1234567890abcdef12345678",
+  "chains": ["Ethereum", "Arbitrum", "Optimism", "Base", "Polygon", "Avalanche", "BNB Chain"]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `address` | string | Yes | EVM wallet address (0x + 40 hex characters) |
+| `chains` | string[] | Yes | List of chains to scan. Valid: Ethereum, Arbitrum, Optimism, Base, Polygon, Avalanche, BNB Chain |
+
+**Response (200 OK):**
+```json
+{
+  "address": "0x1234...5678",
+  "tokens": [
+    {
+      "symbol": "ETH",
+      "name": "Ethereum",
+      "chain": "Ethereum",
+      "balance": "1.500000000000000000",
+      "price_usd": "3200.00",
+      "value_usd": "4800.00",
+      "token_identifier": "ethereum",
+      "token_address": null,
+      "is_native": true
+    },
+    {
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "chain": "Ethereum",
+      "balance": "5000.000000",
+      "price_usd": "1.00",
+      "value_usd": "5000.00",
+      "token_identifier": null,
+      "token_address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      "is_native": false
+    }
+  ],
+  "dust_filtered": 12
+}
+```
+
+**Notes:**
+- Uses Moralis Web3 Data API (`/api/v2.2/wallets/{address}/tokens`) which returns balances with USD prices
+- One API call per chain (7 max)
+- Tokens with USD value < $1 are filtered as dust (count returned in `dust_filtered`)
+- Results sorted by value descending
+- Stores wallet address and chains in state for re-sync
+
+**Errors:**
+```json
+{"error": "Invalid wallet address format"}
+{"error": "No chains specified"}
+```
+
+---
+
+### Import Wallet Tokens
+
+Import selected tokens from a wallet scan as portfolio positions.
+
+```http
+POST /api/wallet/import
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "tokens": [
+    {
+      "symbol": "ETH",
+      "name": "Ethereum",
+      "chain": "Ethereum",
+      "balance": "1.500000000000000000",
+      "price_usd": "3200.00",
+      "value_usd": "4800.00",
+      "token_identifier": "ethereum",
+      "token_address": null,
+      "is_native": true
+    }
+  ]
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "imported": 5
+}
+```
+
+**Notes:**
+- Each token creates a Position with `source: "wallet"`
+- Entry price set to current price at scan time
+- Token identifier resolved to canonical ID (CoinGecko ID for known tokens, address-based for others)
+
+---
+
+### Resync Wallet
+
+Re-scan the stored wallet address and update wallet-imported positions.
+
+```http
+POST /api/wallet/resync
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "updated": 3,
+  "added": 1,
+  "removed": 2
+}
+```
+
+**Logic:**
+- Re-scans all chains from the original scan
+- Existing wallet positions: quantity updated to match current balance
+- New tokens found: added as new positions
+- Tokens no longer found (zero balance): automatically removed
+
+**Errors:**
+```json
+{"error": "No wallet address stored. Scan a wallet first."}
+```
+
+---
+
+### Get Wallet Status
+
+Check if a wallet address is stored for re-sync.
+
+```http
+GET /api/wallet/status
+```
+
+**Response (200 OK):**
+```json
+{
+  "address": "0x1234...5678",
+  "chains": ["Ethereum", "Arbitrum", "Base"]
+}
+```
+
+**Response (no wallet stored):**
+```json
+{
+  "address": null,
+  "chains": []
+}
+```
+
+---
+
 ## Export API
 
 ### Export Positions (CSV)
@@ -946,6 +1117,7 @@ All endpoints return errors in this format:
 - **DeFi Llama**: No strict limits, but be respectful
 - **Dexscreener**: No strict limits, but be respectful
 - **CryptoPanic**: Developer tier; see [CryptoPanic API docs](https://cryptopanic.com/developers/api/) for limits
+- **Moralis**: Free tier: 40,000 requests/month (~2,857 full wallet scans)
 
 **Internal Caching:**
 

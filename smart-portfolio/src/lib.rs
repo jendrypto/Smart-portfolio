@@ -144,6 +144,8 @@ pub struct Position {
     pub user_tags: Vec<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default)]
+    pub source: Option<String>, // None = manual, Some("wallet") = wallet-imported
 }
 
 // ============================================================================
@@ -703,6 +705,10 @@ struct AppState {
     // Risk metrics cache (avoids 30 HTTP requests per load)
     cached_risk_metrics: Option<PortfolioRiskMetrics>,
     risk_metrics_cached_at: u64,
+    // Wallet import
+    wallet_address: Option<String>,
+    wallet_chains: Vec<String>,
+    moralis_api_key: Option<String>,
 }
 
 /// Get the configured CoinGecko API key, or empty string if not set
@@ -732,6 +738,7 @@ fn get_demo_positions() -> Vec<Position> {
             user_tags: vec!["demo".to_string()],
             created_at: now,
             updated_at: now,
+            source: None,
         },
         Position {
             id: "demo_eth".to_string(),
@@ -747,6 +754,7 @@ fn get_demo_positions() -> Vec<Position> {
             user_tags: vec!["demo".to_string()],
             created_at: now,
             updated_at: now,
+            source: None,
         },
         Position {
             id: "demo_sol".to_string(),
@@ -762,6 +770,7 @@ fn get_demo_positions() -> Vec<Position> {
             user_tags: vec!["demo".to_string()],
             created_at: now,
             updated_at: now,
+            source: None,
         },
         Position {
             id: "demo_usdc".to_string(),
@@ -777,6 +786,7 @@ fn get_demo_positions() -> Vec<Position> {
             user_tags: vec!["demo".to_string()],
             created_at: now,
             updated_at: now,
+            source: None,
         },
     ]
 }
@@ -3033,6 +3043,7 @@ fn handle_add_position(state: &mut AppState, body: &[u8]) {
         user_tags: request.user_tags.unwrap_or_default(),
         created_at: now,
         updated_at: now,
+        source: None,
     };
 
     // Fetch price for new position if CoinGecko ID provided
@@ -3418,6 +3429,538 @@ fn handle_debug_http() {
 }
 
 // ============================================================================
+// Moralis Wallet API Integration
+// ============================================================================
+
+fn moralis_chain_id(chain: &str) -> &str {
+    match chain {
+        "Ethereum" => "eth",
+        "Arbitrum" => "arbitrum",
+        "Optimism" => "optimism",
+        "Base" => "base",
+        "Polygon" => "polygon",
+        "Avalanche" => "avalanche",
+        "BNB Chain" => "bsc",
+        _ => "eth",
+    }
+}
+
+fn chain_native_token(chain: &str) -> (&str, &str, &str) {
+    // Returns (symbol, name, coingecko_id)
+    match chain {
+        "Ethereum" | "Arbitrum" | "Optimism" | "Base" => ("ETH", "Ethereum", "ethereum"),
+        "Polygon" => ("MATIC", "Polygon", "matic-network"),
+        "Avalanche" => ("AVAX", "Avalanche", "avalanche-2"),
+        "BNB Chain" => ("BNB", "BNB", "binancecoin"),
+        _ => ("ETH", "Ethereum", "ethereum"),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WalletToken {
+    symbol: String,
+    name: String,
+    chain: String,
+    balance: String,
+    price_usd: String,
+    value_usd: String,
+    token_identifier: Option<String>,
+    token_address: Option<String>,
+    is_native: bool,
+}
+
+/// Response item from Moralis /wallets/{address}/tokens endpoint
+/// This endpoint returns balances WITH prices, so we don't need separate CoinGecko lookups.
+#[derive(Debug, Deserialize)]
+struct MoralisWalletToken {
+    token_address: Option<String>,
+    symbol: Option<String>,
+    name: Option<String>,
+    balance: Option<String>,
+    decimals: Option<u32>,
+    usd_price: Option<f64>,
+    usd_value: Option<f64>,
+    native_token: Option<bool>,
+    portfolio_percentage: Option<f64>,
+}
+
+/// Paginated response from Moralis /wallets/{address}/tokens
+#[derive(Debug, Deserialize)]
+struct MoralisWalletTokensResponse {
+    result: Vec<MoralisWalletToken>,
+}
+
+/// Fetch all token balances (ERC-20 + native) with prices from Moralis in a single call per chain.
+/// Uses the /wallets/{address}/tokens endpoint which returns prices directly.
+fn fetch_wallet_tokens_with_prices(address: &str, chain: &str, api_key: &str) -> Vec<MoralisWalletToken> {
+    let moralis_chain = moralis_chain_id(chain);
+    let url_str = format!(
+        "https://deep-index.moralis.io/api/v2.2/wallets/{}/tokens?chain={}&exclude_spam=true",
+        address, moralis_chain
+    );
+
+    let parsed_url = match url::Url::parse(&url_str) {
+        Ok(u) => u,
+        Err(e) => {
+            println!("smart-portfolio: Moralis URL parse error: {:?}", e);
+            return vec![];
+        }
+    };
+
+    let mut headers = HashMap::new();
+    headers.insert("X-API-Key".to_string(), api_key.to_string());
+
+    match http::client::send_request_await_response(
+        Method::GET,
+        parsed_url,
+        Some(headers),
+        30000,
+        vec![],
+    ) {
+        Ok(response) => {
+            if response.status().is_success() {
+                // Try paginated format first { result: [...] }
+                if let Ok(paginated) = serde_json::from_slice::<MoralisWalletTokensResponse>(response.body()) {
+                    return paginated.result;
+                }
+                // Fall back to plain array format
+                serde_json::from_slice(response.body()).unwrap_or_else(|e| {
+                    println!("smart-portfolio: Moralis token parse error for {}: {:?}", chain, e);
+                    // Log first 500 bytes of response for debugging
+                    let body_preview = String::from_utf8_lossy(
+                        &response.body()[..response.body().len().min(500)]
+                    );
+                    println!("smart-portfolio: Response body preview: {}", body_preview);
+                    vec![]
+                })
+            } else {
+                let body_preview = String::from_utf8_lossy(
+                    &response.body()[..response.body().len().min(500)]
+                );
+                println!("smart-portfolio: Moralis tokens error for {}: {} - {}", chain, response.status(), body_preview);
+                vec![]
+            }
+        }
+        Err(e) => {
+            println!("smart-portfolio: Moralis tokens request error for {}: {:?}", chain, e);
+            vec![]
+        }
+    }
+}
+
+/// Convert a raw balance string (in smallest unit) to a human-readable decimal
+fn format_token_balance(raw_balance: &str, decimals: u32) -> String {
+    let raw = match Decimal::from_str(raw_balance) {
+        Ok(d) => d,
+        Err(_) => return "0".to_string(),
+    };
+
+    if decimals == 0 {
+        return raw.to_string();
+    }
+
+    let divisor = Decimal::from(10u64.pow(decimals.min(18)));
+    let result = raw / divisor;
+
+    format!("{}", result.round_dp(8).normalize())
+}
+
+const MORALIS_API_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjQxNjczOTQ0LTcyMmQtNDVmNS05MzEwLWRjOTI3ZTYwMGY5MyIsIm9yZ0lkIjoiNDk3MTAzIiwidXNlcklkIjoiNTExNTI1IiwidHlwZUlkIjoiYzM4ZjAzMmEtY2FkNC00MGI1LWExNjEtMzk3OGQwNTg5ZWJhIiwidHlwZSI6IlBST0pFQ1QiLCJpYXQiOjE3Njk1Mzg2ODEsImV4cCI6NDkyNTI5ODY4MX0.Cq3XuRN2KTcrGsFjWOo4RGBBWTRM67p1QRrlykpHBGk";
+
+/// Scan a wallet across multiple chains and return discovered tokens.
+/// Uses Moralis /wallets/{address}/tokens which returns prices directly (1 call per chain).
+fn scan_wallet(
+    address: &str,
+    chains: &[String],
+    moralis_api_key: &str,
+    _coingecko_api_key: &str,
+) -> (Vec<WalletToken>, usize) {
+    let mut tokens = Vec::new();
+    let mut dust_count = 0usize;
+
+    for chain in chains {
+        println!("smart-portfolio: scanning {} for wallet {}", chain, address);
+
+        let moralis_tokens = fetch_wallet_tokens_with_prices(address, chain, moralis_api_key);
+        println!("smart-portfolio: found {} tokens on {}", moralis_tokens.len(), chain);
+
+        for mt in &moralis_tokens {
+            let symbol = mt.symbol.clone().unwrap_or_default();
+            let name = mt.name.clone().unwrap_or_default();
+            let raw_balance = mt.balance.clone().unwrap_or_default();
+            let decimals = mt.decimals.unwrap_or(18);
+            let is_native = mt.native_token.unwrap_or(false);
+
+            if raw_balance == "0" || raw_balance.is_empty() {
+                continue;
+            }
+
+            let balance = format_token_balance(&raw_balance, decimals);
+
+            let price = mt.usd_price.unwrap_or(0.0);
+            let value = mt.usd_value.unwrap_or_else(|| {
+                let bal: f64 = balance.parse().unwrap_or(0.0);
+                bal * price
+            });
+
+            // Determine token identifier
+            let token_identifier = if is_native {
+                let (_, _, cg_id) = chain_native_token(chain);
+                Some(cg_id.to_string())
+            } else {
+                // Use contract address as identifier for now; CoinGecko resolution
+                // happens at import time, not scan time
+                None
+            };
+
+            let token_address = if is_native {
+                None
+            } else {
+                mt.token_address.clone()
+            };
+
+            tokens.push(WalletToken {
+                symbol: symbol.to_uppercase(),
+                name,
+                chain: chain.clone(),
+                balance,
+                price_usd: format!("{}", Decimal::from_f64(price).unwrap_or(Decimal::ZERO).round_dp(6).normalize()),
+                value_usd: format!("{}", Decimal::from_f64(value).unwrap_or(Decimal::ZERO).round_dp(2).normalize()),
+                token_identifier,
+                token_address,
+                is_native,
+            });
+        }
+    }
+
+    // Filter dust (< $1)
+    let all_tokens = tokens;
+    tokens = Vec::new();
+    for t in all_tokens {
+        let value: f64 = t.value_usd.parse().unwrap_or(0.0);
+        if value >= 1.0 {
+            tokens.push(t);
+        } else if value > 0.0 {
+            dust_count += 1;
+        }
+    }
+
+    // Sort by value descending
+    tokens.sort_by(|a, b| {
+        let va: f64 = a.value_usd.parse().unwrap_or(0.0);
+        let vb: f64 = b.value_usd.parse().unwrap_or(0.0);
+        vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    (tokens, dust_count)
+}
+
+// ============================================================================
+// Wallet Import Handlers
+// ============================================================================
+
+fn handle_wallet_scan(state: &mut AppState, body: &[u8]) {
+    #[derive(Deserialize)]
+    struct ScanRequest {
+        address: String,
+        chains: Vec<String>,
+    }
+
+    let request: ScanRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(_) => return send_error_response(StatusCode::BAD_REQUEST, "Invalid JSON"),
+    };
+
+    // Validate address format
+    if !is_eth_address(&request.address) {
+        return send_error_response(StatusCode::BAD_REQUEST, "Invalid wallet address. Expected 0x + 40 hex characters.");
+    }
+
+    let moralis_key = MORALIS_API_KEY.to_string();
+    let coingecko_key = get_api_key(state);
+
+    let valid_chains = ["Ethereum", "Arbitrum", "Optimism", "Base", "Polygon", "Avalanche", "BNB Chain"];
+    let chains: Vec<String> = request.chains.iter()
+        .filter(|c| valid_chains.contains(&c.as_str()))
+        .cloned()
+        .collect();
+
+    if chains.is_empty() {
+        return send_error_response(StatusCode::BAD_REQUEST, "No valid chains specified");
+    }
+
+    // Store wallet info for re-sync
+    state.wallet_address = Some(request.address.clone());
+    state.wallet_chains = chains.clone();
+    save_state(state);
+
+    let (tokens, dust_count) = scan_wallet(&request.address, &chains, &moralis_key, &coingecko_key);
+
+    send_json_response(StatusCode::OK, serde_json::json!({
+        "address": request.address,
+        "tokens": tokens,
+        "dust_filtered": dust_count,
+    }));
+}
+
+fn handle_wallet_import(state: &mut AppState, body: &[u8]) {
+    #[derive(Deserialize)]
+    struct ImportRequest {
+        tokens: Vec<WalletToken>,
+    }
+
+    let request: ImportRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(_) => return send_error_response(StatusCode::BAD_REQUEST, "Invalid JSON"),
+    };
+
+    let now = get_current_timestamp();
+    let today = {
+        let dt = DateTime::from_timestamp(now as i64, 0)
+            .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+        dt.format("%Y-%m-%d").to_string()
+    };
+
+    let mut imported_count = 0;
+
+    for token in &request.tokens {
+        let quantity: Decimal = match Decimal::from_str(&token.balance) {
+            Ok(q) if q > Decimal::ZERO => q,
+            _ => continue,
+        };
+
+        let entry_price: Decimal = Decimal::from_str(&token.price_usd).unwrap_or(Decimal::ZERO);
+
+        let id = format!("wallet_{}_{}", token.symbol.to_lowercase(), now + imported_count as u64);
+
+        let canonical_id = if let Some(ref cg_id) = token.token_identifier {
+            Some(CanonicalId::from_coingecko(cg_id, cg_id))
+        } else if let Some(ref addr) = token.token_address {
+            Some(CanonicalId::from_address(addr, &token.chain, addr))
+        } else {
+            Some(CanonicalId::from_symbol(&token.symbol))
+        };
+
+        let position = Position {
+            id: id.clone(),
+            token_identifier: token.token_identifier.clone(),
+            canonical_id,
+            token_symbol: token.symbol.to_uppercase(),
+            token_name: token.name.clone(),
+            chain: token.chain.clone(),
+            quantity,
+            entry_price_usd: entry_price,
+            entry_date: Some(today.clone()),
+            user_note: None,
+            user_tags: vec![],
+            created_at: now,
+            updated_at: now,
+            source: Some("wallet".to_string()),
+        };
+
+        // Store price data
+        if let Some(ref cg_id) = token.token_identifier {
+            // Native tokens with CoinGecko IDs - fetch from CoinGecko for canonical storage
+            if !state.prices.contains_key(cg_id) {
+                let api_key = get_api_key(state);
+                let prices = fetch_prices_from_coingecko(&[cg_id.clone()], &api_key);
+                for (pid, price_data) in prices {
+                    state.prices.insert(pid.clone(), price_data.clone());
+                    let canonical_key = format!("coingecko:{}", pid.to_lowercase());
+                    state.prices.insert(canonical_key, price_data);
+                }
+            }
+        } else if let Some(ref addr) = token.token_address {
+            // ERC-20 tokens without CoinGecko ID - store Moralis price under address key
+            let price_usd: f64 = token.price_usd.parse().unwrap_or(0.0);
+            if price_usd > 0.0 {
+                let canonical_key = format!("address:{}:{}", token.chain.to_lowercase(), addr.to_lowercase());
+                state.prices.insert(canonical_key.clone(), PriceData {
+                    price_usd,
+                    price_change_24h: None,
+                    market_cap: None,
+                    timestamp: now,
+                    is_stale: false,
+                    volume_24h: None,
+                    liquidity_usd: None,
+                    price_source: PriceSource::Manual,
+                    fdv: None,
+                });
+                // Also store under raw address for backwards compat
+                state.prices.insert(addr.to_lowercase(), PriceData {
+                    price_usd,
+                    price_change_24h: None,
+                    market_cap: None,
+                    timestamp: now,
+                    is_stale: false,
+                    volume_24h: None,
+                    liquidity_usd: None,
+                    price_source: PriceSource::Manual,
+                    fdv: None,
+                });
+            }
+        }
+
+        state.positions.insert(id, position);
+        imported_count += 1;
+    }
+
+    save_state(state);
+
+    send_json_response(StatusCode::OK, serde_json::json!({
+        "success": true,
+        "imported": imported_count,
+    }));
+}
+
+fn handle_wallet_resync(state: &mut AppState) {
+    let address = match &state.wallet_address {
+        Some(addr) => addr.clone(),
+        None => return send_error_response(StatusCode::BAD_REQUEST, "No wallet address configured. Scan a wallet first."),
+    };
+
+    let chains = state.wallet_chains.clone();
+    if chains.is_empty() {
+        return send_error_response(StatusCode::BAD_REQUEST, "No chains configured for wallet scan.");
+    }
+
+    let moralis_key = MORALIS_API_KEY.to_string();
+    let coingecko_key = get_api_key(state);
+
+    let (tokens, _dust_count) = scan_wallet(&address, &chains, &moralis_key, &coingecko_key);
+
+    let now = get_current_timestamp();
+    let today = {
+        let dt = DateTime::from_timestamp(now as i64, 0)
+            .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+        dt.format("%Y-%m-%d").to_string()
+    };
+
+    let mut updated = 0usize;
+    let mut added = 0usize;
+    let mut removed = 0usize;
+
+    // Build a lookup for scanned tokens by canonical key
+    let mut scanned_keys: HashMap<String, &WalletToken> = HashMap::new();
+    for t in &tokens {
+        let key = if let Some(ref cg_id) = t.token_identifier {
+            format!("cg:{}", cg_id)
+        } else {
+            format!("sym:{}:{}", t.symbol.to_uppercase(), t.chain)
+        };
+        scanned_keys.insert(key, t);
+    }
+
+    // Track which scanned tokens matched existing positions
+    let mut matched_scan_keys: Vec<String> = Vec::new();
+
+    // Update existing wallet-sourced positions
+    let position_ids: Vec<String> = state.positions.keys().cloned().collect();
+    for pid in &position_ids {
+        let pos = match state.positions.get(pid) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        // Only touch wallet-sourced positions
+        if pos.source.as_deref() != Some("wallet") {
+            continue;
+        }
+
+        // Find matching scanned token
+        let pos_key = if let Some(ref cid) = pos.canonical_id {
+            if let Some(ref cg_id) = cid.coingecko_id {
+                format!("cg:{}", cg_id)
+            } else {
+                format!("sym:{}:{}", pos.token_symbol, pos.chain)
+            }
+        } else {
+            format!("sym:{}:{}", pos.token_symbol, pos.chain)
+        };
+
+        if let Some(scanned_token) = scanned_keys.get(&pos_key) {
+            // Update quantity
+            if let Ok(new_qty) = Decimal::from_str(&scanned_token.balance) {
+                let position = state.positions.get_mut(pid).unwrap();
+                position.quantity = new_qty;
+                position.updated_at = now;
+                updated += 1;
+            }
+            matched_scan_keys.push(pos_key);
+        } else {
+            // Token not found in scan → remove (zero balance)
+            state.positions.remove(pid);
+            removed += 1;
+        }
+    }
+
+    // Add new tokens not matched to existing positions
+    for t in &tokens {
+        let key = if let Some(ref cg_id) = t.token_identifier {
+            format!("cg:{}", cg_id)
+        } else {
+            format!("sym:{}:{}", t.symbol.to_uppercase(), t.chain)
+        };
+
+        if matched_scan_keys.contains(&key) {
+            continue;
+        }
+
+        let quantity: Decimal = match Decimal::from_str(&t.balance) {
+            Ok(q) if q > Decimal::ZERO => q,
+            _ => continue,
+        };
+
+        let entry_price = Decimal::from_str(&t.price_usd).unwrap_or(Decimal::ZERO);
+        let id = format!("wallet_{}_{}", t.symbol.to_lowercase(), now + added as u64);
+
+        let canonical_id = if let Some(ref cg_id) = t.token_identifier {
+            Some(CanonicalId::from_coingecko(cg_id, cg_id))
+        } else if let Some(ref addr) = t.token_address {
+            Some(CanonicalId::from_address(addr, &t.chain, addr))
+        } else {
+            Some(CanonicalId::from_symbol(&t.symbol))
+        };
+
+        let position = Position {
+            id: id.clone(),
+            token_identifier: t.token_identifier.clone(),
+            canonical_id,
+            token_symbol: t.symbol.to_uppercase(),
+            token_name: t.name.clone(),
+            chain: t.chain.clone(),
+            quantity,
+            entry_price_usd: entry_price,
+            entry_date: Some(today.clone()),
+            user_note: None,
+            user_tags: vec![],
+            created_at: now,
+            updated_at: now,
+            source: Some("wallet".to_string()),
+        };
+
+        state.positions.insert(id, position);
+        added += 1;
+    }
+
+    save_state(state);
+
+    send_json_response(StatusCode::OK, serde_json::json!({
+        "success": true,
+        "updated": updated,
+        "added": added,
+        "removed": removed,
+    }));
+}
+
+fn handle_wallet_status(state: &AppState) {
+    send_json_response(StatusCode::OK, serde_json::json!({
+        "address": state.wallet_address,
+        "chains": state.wallet_chains,
+    }));
+}
+
+// ============================================================================
 // Configuration Handlers
 // ============================================================================
 
@@ -3426,6 +3969,7 @@ fn handle_set_config(state: &mut AppState, body: &[u8]) {
     struct ConfigRequest {
         api_key: Option<String>,
         cryptopanic_api_key: Option<String>,
+        moralis_api_key: Option<String>,
     }
 
     let request: ConfigRequest = match serde_json::from_slice(body) {
@@ -3446,6 +3990,14 @@ fn handle_set_config(state: &mut AppState, body: &[u8]) {
             state.cryptopanic_api_key = None;
         } else {
             state.cryptopanic_api_key = Some(key);
+        }
+    }
+
+    if let Some(key) = request.moralis_api_key {
+        if key.is_empty() {
+            state.moralis_api_key = None;
+        } else {
+            state.moralis_api_key = Some(key);
         }
     }
 
@@ -3470,11 +4022,21 @@ fn handle_get_config(state: &AppState) {
         }
     });
 
+    let masked_moralis_key = state.moralis_api_key.as_ref().map(|k| {
+        if k.len() > 8 {
+            format!("{}...{}", &k[..4], &k[k.len()-4..])
+        } else {
+            "****".to_string()
+        }
+    });
+
     send_json_response(StatusCode::OK, serde_json::json!({
         "api_key_configured": state.api_key.is_some(),
         "api_key_masked": masked_key,
         "cryptopanic_api_key_configured": state.cryptopanic_api_key.is_some(),
         "cryptopanic_api_key_masked": masked_cryptopanic_key,
+        "moralis_api_key_configured": state.moralis_api_key.is_some(),
+        "moralis_api_key_masked": masked_moralis_key,
     }));
 }
 
@@ -3555,6 +4117,12 @@ fn handle_http_request(state: &mut AppState, req: &IncomingHttpRequest, body: &[
         (Method::POST, ["api", "demo", "load"]) => handle_load_demo(state),
         (Method::DELETE, ["api", "demo", "clear"]) => handle_clear_demo(state),
 
+        // Wallet Import API
+        (Method::POST, ["api", "wallet", "scan"]) => handle_wallet_scan(state, body),
+        (Method::POST, ["api", "wallet", "import"]) => handle_wallet_import(state, body),
+        (Method::POST, ["api", "wallet", "resync"]) => handle_wallet_resync(state),
+        (Method::GET, ["api", "wallet", "status"]) => handle_wallet_status(state),
+
         // Configuration API
         (Method::POST, ["api", "config"]) => handle_set_config(state, body),
         (Method::GET, ["api", "config"]) => handle_get_config(state),
@@ -3571,9 +4139,6 @@ fn handle_http_request(state: &mut AppState, req: &IncomingHttpRequest, body: &[
 // ============================================================================
 // Main Loop
 // ============================================================================
-
-// EXTENSION POINT: Future wallet import integration
-// fn import_from_wallet(wallet_address: &str, chain: &str) -> Vec<Position> { ... }
 
 // EXTENSION POINT: Future advanced exposure mapping
 // fn get_protocol_exposure(position: &Position) -> Vec<ProtocolExposure> { ... }
@@ -3628,6 +4193,11 @@ fn init(_our: Address) {
         // Demo portfolio APIs
         "/api/demo/load",
         "/api/demo/clear",
+        // Wallet Import API
+        "/api/wallet/scan",
+        "/api/wallet/import",
+        "/api/wallet/resync",
+        "/api/wallet/status",
         // Configuration API
         "/api/config",
         // Debug endpoint

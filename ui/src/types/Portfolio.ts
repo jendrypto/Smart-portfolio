@@ -25,6 +25,7 @@ export interface Position {
   user_tags: string[];
   created_at: number;
   updated_at: number;
+  source?: string | null; // null/undefined = manual, "wallet" = wallet-imported
 }
 
 export interface PositionWithDerived {
@@ -323,4 +324,39 @@ export interface NewsItem {
   published_at: string;
   positive_votes: number;
   negative_votes: number;
+}
+
+// ============================================================================
+// Wallet Import Types
+// ============================================================================
+
+export interface WalletToken {
+  symbol: string;
+  name: string;
+  chain: string;
+  balance: string;
+  price_usd: string;
+  value_usd: string;
+  token_identifier?: string;
+  token_address?: string;
+  is_native: boolean;
+  selected?: boolean; // UI-only for checkbox state
+}
+
+export interface ScanResult {
+  address: string;
+  tokens: WalletToken[];
+  dust_filtered: number;
+}
+
+export interface ResyncSummary {
+  success: boolean;
+  updated: number;
+  added: number;
+  removed: number;
+}
+
+export interface WalletStatus {
+  address?: string;
+  chains?: string[];
 }

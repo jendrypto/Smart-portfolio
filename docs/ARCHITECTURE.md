@@ -29,12 +29,12 @@ This document explains the system architecture, data flow, and key design decisi
 │  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                                    │
-                    ┌──────────┬──────────────┬──────────────┐
-                    ▼          ▼              ▼              ▼
-            ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐
-            │ CoinGecko │ │DeFi Llama │ │Dexscreener│ │CryptoPanic│
-            │    API    │ │    API    │ │    API    │ │  API v2   │
-            └───────────┘ └───────────┘ └───────────┘ └───────────┘
+                    ┌──────────┬──────────────┬──────────────┬──────────────┐
+                    ▼          ▼              ▼              ▼              ▼
+            ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐
+            │ CoinGecko │ │DeFi Llama │ │Dexscreener│ │CryptoPanic│ │  Moralis  │
+            │    API    │ │    API    │ │    API    │ │  API v2   │ │ Web3 API  │
+            └───────────┘ └───────────┘ └───────────┘ └───────────┘ └───────────┘
 ```
 
 ## Component Architecture
@@ -61,7 +61,8 @@ lib.rs
 │   ├── CoinGecko         - Price feeds, token search
 │   ├── DeFi Llama        - Chain TVL data, historical prices
 │   ├── Dexscreener       - DEX prices, liquidity
-│   └── CryptoPanic       - Real-time crypto news (Developer API v2)
+│   ├── CryptoPanic       - Real-time crypto news (Developer API v2)
+│   └── Moralis          - Wallet token balances with prices (Web3 Data API v2.2)
 │
 ├── Analytics Engine
 │   ├── calculate_positions_with_derived()
@@ -88,7 +89,11 @@ lib.rs
 │   ├── handle_get_holdings()
 │   ├── handle_add_position()
 │   ├── handle_get_insights()
-│   └── ... (13 handlers total)
+│   ├── handle_wallet_scan()
+│   ├── handle_wallet_import()
+│   ├── handle_wallet_resync()
+│   ├── handle_wallet_status()
+│   └── ... (17 handlers total)
 │
 └── Main Loop
     └── Process incoming HTTP requests
@@ -111,7 +116,9 @@ ui/src/
 │   ├── PortfolioChart.tsx- Line chart for history
 │   ├── InsightCards.tsx  - Dynamic insight display
 │   ├── ExposureSidePanel.tsx - Category detail panel with news feed
-│   └── AddPositionModal.tsx - Position entry form
+│   ├── AddPositionModal.tsx - Position entry form
+│   ├── WalletImportModal.tsx - Wallet scan/import 3-step modal
+│   └── EditPositionModal.tsx - Position editing form
 │
 ├── store/
 │   └── portfolio.ts      - Zustand state management
@@ -262,6 +269,36 @@ GET /api/news?currencies=BTC,ETH
 → Frontend renders each as a clickable <a> link opening in new tab
 ```
 
+### 6. Wallet Import Flow
+
+```
+Wallet Import Flow:
+User clicks "Import Wallet"
+→ Modal opens with address input + chain checkboxes (all 7 EVM chains checked)
+→ User enters 0x address and clicks "Scan"
+→ POST /api/wallet/scan { address, chains }
+→ Backend: For each chain, call Moralis /api/v2.2/wallets/{address}/tokens?chain={chain}
+→ Each call returns token balances + USD prices (1 call per chain, 7 total)
+→ Filter dust tokens (< $1), sort by value descending
+→ Return token list to frontend
+→ Modal shows results table with checkboxes (all selected by default)
+→ User selects tokens and clicks "Import"
+→ POST /api/wallet/import { tokens }
+→ Backend: Create Position for each token with source: "wallet"
+→ Positions appear in Holdings with "W" badge
+
+Wallet Re-sync Flow:
+User clicks "Refresh Wallet" in positions header
+→ POST /api/wallet/resync
+→ Re-scan all stored chains via Moralis
+→ Match found tokens against existing wallet positions:
+  - Existing: update quantity
+  - New: create position
+  - Missing: remove position (zero balance)
+→ Return { updated, added, removed }
+→ Toast message shown for 4 seconds
+```
+
 ## State Management
 
 ### Backend State (Rust)
@@ -287,6 +324,10 @@ struct AppState {
     cached_risk_metrics: Option<PortfolioRiskMetrics>,  // Cached result
     risk_metrics_cached_at: u64,                        // Unix timestamp of last computation
 
+    // Wallet import
+    wallet_address: Option<String>,        // Stored for re-sync
+    wallet_chains: Vec<String>,            // Which chains were scanned
+
     // Timestamps
     last_price_fetch: u64,
     last_tvl_fetch: u64,
@@ -301,6 +342,7 @@ struct Position {
     chain: String,
     quantity: Decimal,
     entry_price_usd: Decimal,
+    source: Option<String>,  // None = manual, Some("wallet") = wallet-imported
     // ...
 }
 
@@ -535,8 +577,8 @@ Demo positions are tagged with "demo" for identification and cleanup.
 The code includes marked extension points:
 
 ```rust
-// EXTENSION POINT: Future wallet import integration
-// fn import_from_wallet(wallet_address: &str, chain: &str) -> Vec<Position>
+// IMPLEMENTED: Wallet import via Moralis API (v0.3.0)
+// See handle_wallet_scan(), handle_wallet_import(), handle_wallet_resync()
 
 // EXTENSION POINT: Future advanced exposure mapping
 // fn get_protocol_exposure(position: &Position) -> Vec<ProtocolExposure>
@@ -549,7 +591,6 @@ The code includes marked extension points:
 ```
 
 These can be implemented to add:
-- Automatic wallet scanning
 - DeFi protocol decomposition
 - LLM-generated summaries
 - Historical exposure tracking

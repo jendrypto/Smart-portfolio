@@ -9,6 +9,16 @@ A local-first cryptocurrency portfolio tracker built as a Hyperware app. Track y
 - Track entry prices, quantities, and dates
 - View real-time P&L (Profit/Loss) calculations
 - Automatic price updates from multiple data sources
+- Import positions directly from an EVM wallet address
+
+### Wallet Import
+- Import token positions by entering an EVM wallet address
+- Scans 7 EVM chains: Ethereum, Arbitrum, Optimism, Base, Polygon, Avalanche, BNB Chain
+- Automatic balance and price detection via Moralis API
+- Selective import: review discovered tokens and choose which to add
+- Dust filtering: small-value tokens (< $1) filtered by default
+- Re-sync button to update wallet positions after initial import
+- Wallet-imported positions marked with "W" badge in the positions table
 
 ### Portfolio Analytics
 - **Summary Dashboard**: Total value, unrealized P&L, top positions
@@ -50,6 +60,7 @@ Integrated with four data providers:
 - **DeFi Llama**: Chain TVL data, protocol information, historical prices
 - **Dexscreener**: DEX prices, liquidity, volume for newer tokens
 - **CryptoPanic**: Real-time crypto news and sentiment (Developer API v2)
+- **Moralis**: EVM wallet token balances and USD prices across 7 chains
 
 ### Security & Data Integrity
 - **Input Validation**: Strict bounds checking on all user inputs
@@ -135,6 +146,7 @@ smart-portfolio/
 - DeFi Llama API (free, no key)
 - Dexscreener API (free, no key)
 - CryptoPanic Developer API v2 (API key included as fallback; can be overridden via config)
+- Moralis Web3 Data API (API key built-in)
 
 ## Configuration
 

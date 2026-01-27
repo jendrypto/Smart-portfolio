@@ -45,11 +45,23 @@ function PositionsTable() {
     setEditingPositionId,
     isLoading,
     summary,
+    walletAddress,
+    resyncWallet,
+    isWalletResyncing,
   } = usePortfolioStore();
 
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const [resyncMessage, setResyncMessage] = useState<string | null>(null);
+
+  const handleResyncWallet = async () => {
+    const result = await resyncWallet();
+    if (result) {
+      setResyncMessage(`Synced: ${result.updated} updated, ${result.added} added, ${result.removed} removed`);
+      setTimeout(() => setResyncMessage(null), 4000);
+    }
+  };
 
   const toggleRowActions = (id: string) => {
     if (activeRowId === id) {
@@ -126,6 +138,16 @@ function PositionsTable() {
           <span className="positions-count">{positions.length}</span>
         </h2>
         <div className="positions-meta">
+          {walletAddress && (
+            <button
+              className="btn btn-small btn-secondary"
+              onClick={handleResyncWallet}
+              disabled={isWalletResyncing}
+              title={`Refresh wallet ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`}
+            >
+              {isWalletResyncing ? 'Syncing...' : 'Refresh Wallet'}
+            </button>
+          )}
           <button
             className={`btn btn-small ${editMode ? 'btn-edit-active' : 'btn-edit'}`}
             onClick={() => {
@@ -185,7 +207,12 @@ function PositionsTable() {
                     <div className="token-cell">
                       <div className={`token-icon ${icon.class}`}>{icon.text}</div>
                       <div className="token-info">
-                        <span className="token-name">{p.position.token_name}</span>
+                        <span className="token-name">
+                          {p.position.token_name}
+                          {p.position.source === 'wallet' && (
+                            <span className="wallet-badge" title="Wallet imported">W</span>
+                          )}
+                        </span>
                         <span className="token-symbol">{p.position.token_symbol}</span>
                       </div>
                     </div>
@@ -236,6 +263,19 @@ function PositionsTable() {
         </table>
       </div>
 
+      {resyncMessage && (
+        <div style={{
+          padding: '0.5rem 1rem',
+          background: 'rgba(217, 253, 101, 0.1)',
+          border: '1px solid rgba(217, 253, 101, 0.3)',
+          borderRadius: '0.375rem',
+          margin: '0 1rem 0.5rem',
+          fontSize: '0.8rem',
+          color: 'var(--primary)',
+        }}>
+          {resyncMessage}
+        </div>
+      )}
       <div className="positions-footer">
         <div className="positions-footer-info">
           Showing <span>{positions.length}</span> assets

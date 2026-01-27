@@ -66,7 +66,8 @@ smart-portfolio/src/lib.rs
 ├── External API Integrations
 │   ├── CoinGecko (search, prices, top tokens)
 │   ├── DeFi Llama (chain TVL, token prices, historical prices)
-│   └── Dexscreener (pair search, token price)
+│   ├── Dexscreener (pair search, token price)
+│   └── Moralis Web3 API (wallet token balances + prices)
 ├── Risk Metrics Calculation
 │   ├── Historical price fetching
 │   ├── Returns and volatility calculation
@@ -78,6 +79,7 @@ smart-portfolio/src/lib.rs
 ├── HTTP Response Helpers
 ├── Route Handlers (handle_* functions)
 ├── Configuration Handlers (config get/set)
+├── Wallet Handlers (scan, import, resync, status)
 ├── HTTP Request Router
 └── Main Loop (init, server setup, message loop)
 ```
@@ -96,7 +98,11 @@ ui/src/
 │   ├── PositionsTable.tsx   # Position list
 │   ├── PortfolioChart.tsx   # Recharts line graph
 │   ├── InsightCards.tsx     # Insight display
-│   └── AddPositionModal.tsx # Position form
+│   ├── AddPositionModal.tsx    # Position form
+│   ├── EditPositionModal.tsx  # Position editing form
+│   ├── WalletImportModal.tsx  # Wallet scan/import modal
+│   ├── TickerBanner.tsx       # Price ticker banner
+│   └── InfoFAB.tsx            # Info floating action button
 │
 ├── store/
 │   └── portfolio.ts   # Zustand store (all state + actions)
@@ -363,6 +369,7 @@ Hyperware's persistent process state.
 
 - **CoinGecko**: Set via `POST /api/config` with `{"api_key": "your-key"}`; no hardcoded fallback
 - **CryptoPanic**: Set via `POST /api/config` with `{"cryptopanic_api_key": "your-key"}`; a hardcoded fallback key (`CRYPTOPANIC_FALLBACK_KEY`) is included so news works out of the box
+- **Moralis**: Hardcoded `MORALIS_API_KEY` constant in the backend; no runtime configuration needed
 - Check: `GET /api/config` returns masked key status
 - Keys persist across restarts via bincode-serialized state
 
@@ -756,6 +763,24 @@ Use the defined CSS variables for consistency:
 - [ ] Verify CSV with formula chars (=SUM) is escaped
 - [ ] Open exported CSV in spreadsheet app safely
 
+**Wallet Import:**
+- [ ] Click "Import Wallet" → modal opens
+- [ ] Enter invalid address → error shown
+- [ ] Enter valid 0x address with all chains selected → click "Scan Wallet"
+- [ ] Scanning spinner appears → results table loads
+- [ ] Verify token list shows symbol, chain, balance, value
+- [ ] Toggle individual tokens and "Select All" / "Deselect All"
+- [ ] Click "Import" → positions appear in Holdings with "W" badge
+- [ ] Click "Refresh Wallet" button → resync runs, toast shows counts
+- [ ] Verify wallet-imported position shows "W" badge next to token name
+- [ ] Edit a wallet-imported position's entry price → verify it persists
+- [ ] Add a manual position → verify it's unaffected by wallet re-sync
+
+**Wallet Import (Mobile):**
+- [ ] Modal fits on mobile screen
+- [ ] Chain/Balance columns hidden, chain shown inline in token name
+- [ ] Import Wallet button visible in header on mobile
+
 ### API Testing
 
 ```bash
@@ -791,6 +816,14 @@ curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/token
 
 # Debug
 curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/debug/http
+
+# Wallet Import
+curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/wallet/scan \
+  -H "Content-Type: application/json" \
+  -d '{"address": "0xYOUR_WALLET_ADDRESS", "chains": ["Ethereum", "Arbitrum"]}'
+
+curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/wallet/resync
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/wallet/status
 ```
 
 ---

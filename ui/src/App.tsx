@@ -4,6 +4,7 @@ import HoldingsTab from './components/HoldingsTab';
 import ExposureTab from './components/ExposureTab';
 import AddPositionModal from './components/AddPositionModal';
 import EditPositionModal from './components/EditPositionModal';
+import WalletImportModal from './components/WalletImportModal';
 import TickerBanner from './components/TickerBanner';
 import InfoFAB from './components/InfoFAB';
 import glowLogo from './assets/glow-logo.png';
@@ -25,11 +26,15 @@ function App() {
     isAddModalOpen,
     setAddModalOpen,
     editingPositionId,
+    isWalletModalOpen,
+    setWalletModalOpen,
+    fetchWalletStatus,
   } = usePortfolioStore();
 
   useEffect(() => {
     fetchHoldings();
-  }, [fetchHoldings]);
+    fetchWalletStatus();
+  }, [fetchHoldings, fetchWalletStatus]);
 
   useEffect(() => {
     if (activeTab === 'exposure') {
@@ -72,6 +77,12 @@ function App() {
             >
               <span>&#8635;</span>
               {isLoading ? 'Loading...' : 'Refresh Prices'}
+            </button>
+            <button
+              onClick={() => setWalletModalOpen(true)}
+              className="btn btn-secondary btn-wallet-import"
+            >
+              Import Wallet
             </button>
             <button
               onClick={() => setAddModalOpen(true)}
@@ -122,6 +133,7 @@ function App() {
 
       {isAddModalOpen && <AddPositionModal />}
       {editingPositionId && <EditPositionModal />}
+      {isWalletModalOpen && <WalletImportModal />}
       <InfoFAB isExposureTab={activeTab === 'exposure'} />
       <TickerBanner />
     </div>

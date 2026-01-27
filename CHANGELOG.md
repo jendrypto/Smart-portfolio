@@ -6,6 +6,67 @@ Format: [Semantic Versioning](https://semver.org/) with date/time stamps.
 
 ---
 
+## [0.3.0] - 2026-01-27
+
+### Summary
+
+Wallet import feature: users can now import token positions by entering an EVM wallet address. Uses Moralis API to scan balances across 7 EVM chains with USD pricing. Supports one-time import and manual re-sync.
+
+### Added
+
+- **Wallet Import via Moralis API** (2026-01-27)
+  - New "Import Wallet" button in the header opens a 3-step modal flow: enter address → scan → review & import
+  - Scans ERC-20 and native token balances across 7 EVM chains: Ethereum, Arbitrum, Optimism, Base, Polygon, Avalanche, BNB Chain
+  - Uses Moralis `/api/v2.2/wallets/{address}/tokens` endpoint which returns balances with USD prices in a single call per chain
+  - Token results displayed in a table with checkboxes for selective import
+  - Dust filtering: tokens with value < $1 are filtered out (count shown, toggle to reveal)
+  - Imported positions tagged with `source: "wallet"` and display a "W" badge in the positions table
+  - Entry price set to current price at scan time (editable via existing edit modal)
+
+- **Wallet Re-sync** (2026-01-27)
+  - "Refresh Wallet" button appears in the positions header when a wallet address is stored
+  - Re-scans all previously scanned chains via Moralis
+  - Updates quantities for existing wallet positions, adds new tokens found, auto-removes tokens with zero balance
+  - Returns summary: updated/added/removed counts displayed as a toast message (auto-dismisses after 4 seconds)
+
+- **New Backend Endpoints** (2026-01-27)
+  - `POST /api/wallet/scan` - Scan wallet address across selected chains, returns discovered tokens with prices
+  - `POST /api/wallet/import` - Import selected tokens as portfolio positions
+  - `POST /api/wallet/resync` - Re-scan and sync wallet positions (update/add/remove)
+  - `GET /api/wallet/status` - Returns stored wallet address and chains
+
+- **New Frontend Components** (2026-01-27)
+  - `WalletImportModal.tsx` - 3-step modal (input → scanning → results) with chain selection, token table, and selective import
+  - Mobile-responsive: chain/balance columns hidden on small screens, inline chain display in token name cell
+  - Loading spinner animation during scan
+
+- **Backend State Extensions** (2026-01-27)
+  - `Position.source: Option<String>` - tracks whether position was manually added or wallet-imported
+  - `AppState.wallet_address: Option<String>` - stored for re-sync
+  - `AppState.wallet_chains: Vec<String>` - which chains were scanned
+  - `MORALIS_API_KEY` constant for Moralis Web3 Data API authentication
+
+### Changed
+
+- `Position` struct now includes `source` field with `#[serde(default)]` for backwards compatibility
+- `AppState` struct includes wallet-related fields with `#[serde(default)]`
+- Positions table shows wallet badge ("W") next to wallet-imported token names
+- Header now includes "Import Wallet" button (visible on both desktop and mobile)
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `smart-portfolio/src/lib.rs` | Added `source` to Position; added `wallet_address`, `wallet_chains` to AppState; added `MORALIS_API_KEY` constant; added Moralis chain mapping functions; added `MoralisWalletToken` structs; added `fetch_wallet_tokens_with_prices()`, `scan_wallet()`; added 4 new endpoint handlers; registered 4 new routes |
+| `ui/src/components/WalletImportModal.tsx` | New component: 3-step wallet import modal with address input, chain checkboxes, token results table |
+| `ui/src/components/PositionsTable.tsx` | Added Refresh Wallet button, wallet "W" badge, resync toast message |
+| `ui/src/App.tsx` | Added Import Wallet button, WalletImportModal rendering, fetchWalletStatus on mount |
+| `ui/src/store/portfolio.ts` | Added wallet state fields and actions: scanWallet, importWalletTokens, resyncWallet, fetchWalletStatus |
+| `ui/src/types/Portfolio.ts` | Added WalletToken, ScanResult, ResyncSummary, WalletStatus interfaces; added `source` to Position |
+| `ui/src/App.css` | Added modal-wide, wallet-badge, btn-wallet-import, loading-spinner styles; mobile-responsive wallet rules |
+
+---
+
 ## [0.2.0] - 2026-01-27
 
 ### Summary

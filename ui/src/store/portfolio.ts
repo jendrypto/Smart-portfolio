@@ -20,6 +20,10 @@ import {
   PortfolioRiskMetrics,
   ActionableRecommendation,
   Scenario,
+  WalletToken,
+  ScanResult,
+  ResyncSummary,
+  WalletStatus,
 } from '../types/Portfolio';
 import { API_BASE } from '../utils/api';
 
@@ -90,6 +94,18 @@ export interface PortfolioStore {
   // Demo portfolio
   loadDemoPortfolio: () => Promise<boolean>;
   clearDemoPortfolio: () => Promise<boolean>;
+
+  // Wallet import
+  walletAddress: string | null;
+  walletChains: string[];
+  isWalletModalOpen: boolean;
+  isWalletScanning: boolean;
+  isWalletResyncing: boolean;
+  setWalletModalOpen: (open: boolean) => void;
+  scanWallet: (address: string, chains: string[]) => Promise<ScanResult | null>;
+  importWalletTokens: (tokens: WalletToken[]) => Promise<boolean>;
+  resyncWallet: () => Promise<ResyncSummary | null>;
+  fetchWalletStatus: () => Promise<void>;
 }
 
 const usePortfolioStore = create<PortfolioStore>((set, get) => ({
@@ -124,6 +140,13 @@ const usePortfolioStore = create<PortfolioStore>((set, get) => ({
   sortDirection: 'desc',
   isAddModalOpen: false,
   editingPositionId: null,
+
+  // Wallet import initial state
+  walletAddress: null,
+  walletChains: [],
+  isWalletModalOpen: false,
+  isWalletScanning: false,
+  isWalletResyncing: false,
 
   // UI Actions
   setActiveTab: (tab) => set({ activeTab: tab }),
@@ -439,6 +462,86 @@ const usePortfolioStore = create<PortfolioStore>((set, get) => ({
       return false;
     }
   },
+
+  // Wallet Import Actions
+  setWalletModalOpen: (open) => set({ isWalletModalOpen: open }),
+
+  scanWallet: async (address, chains) => {
+    set({ isWalletScanning: true, error: null });
+    try {
+      const response = await fetch(`${API_BASE}/api/wallet/scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, chains }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to scan wallet');
+      }
+      const data: ScanResult = await response.json();
+      set({ isWalletScanning: false, walletAddress: data.address });
+      return data;
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Unknown error', isWalletScanning: false });
+      return null;
+    }
+  },
+
+  importWalletTokens: async (tokens) => {
+    set({ isLoading: true, error: null });
+    try {
+      const response = await fetch(`${API_BASE}/api/wallet/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tokens }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to import wallet tokens');
+      }
+      set({ isLoading: false, isWalletModalOpen: false });
+      await get().fetchHoldings();
+      return true;
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Unknown error', isLoading: false });
+      return false;
+    }
+  },
+
+  resyncWallet: async () => {
+    set({ isWalletResyncing: true, error: null });
+    try {
+      const response = await fetch(`${API_BASE}/api/wallet/resync`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to resync wallet');
+      }
+      const data: ResyncSummary = await response.json();
+      set({ isWalletResyncing: false });
+      await get().fetchHoldings();
+      return data;
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Unknown error', isWalletResyncing: false });
+      return null;
+    }
+  },
+
+  fetchWalletStatus: async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/wallet/status`);
+      if (!response.ok) return;
+      const data: WalletStatus = await response.json();
+      set({
+        walletAddress: data.address || null,
+        walletChains: data.chains || [],
+      });
+    } catch (e) {
+      console.error('Wallet status fetch error:', e);
+    }
+  },
+
 }));
 
 export default usePortfolioStore;
