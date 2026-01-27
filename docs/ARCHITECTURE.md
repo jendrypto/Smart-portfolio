@@ -29,12 +29,12 @@ This document explains the system architecture, data flow, and key design decisi
 │  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                                    │
-                    ┌──────────────┼──────────────┐
-                    ▼              ▼              ▼
-            ┌───────────┐  ┌───────────┐  ┌───────────┐
-            │ CoinGecko │  │DeFi Llama │  │Dexscreener│
-            │    API    │  │    API    │  │    API    │
-            └───────────┘  └───────────┘  └───────────┘
+                    ┌──────────┬──────────────┬──────────────┐
+                    ▼          ▼              ▼              ▼
+            ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐
+            │ CoinGecko │ │DeFi Llama │ │Dexscreener│ │CryptoPanic│
+            │    API    │ │    API    │ │    API    │ │  API v2   │
+            └───────────┘ └───────────┘ └───────────┘ └───────────┘
 ```
 
 ## Component Architecture
@@ -59,14 +59,30 @@ lib.rs
 │
 ├── API Integrations
 │   ├── CoinGecko         - Price feeds, token search
-│   ├── DeFi Llama        - Chain TVL data
-│   └── Dexscreener       - DEX prices, liquidity
+│   ├── DeFi Llama        - Chain TVL data, historical prices
+│   ├── Dexscreener       - DEX prices, liquidity
+│   └── CryptoPanic       - Real-time crypto news (Developer API v2)
 │
 ├── Analytics Engine
 │   ├── calculate_positions_with_derived()
 │   ├── calculate_portfolio_summary()
 │   ├── calculate_exposure()
-│   └── generate_insights()
+│   ├── generate_insights()
+│   ├── Risk Analysis
+│   │   ├── Correlation matrix (Pearson)
+│   │   ├── Volatility scores (7d/30d annualized)
+│   │   └── Drawdown metrics (current & max)
+│   ├── Recommendations Engine
+│   │   ├── Concentration warnings
+│   │   ├── Volatility alerts
+│   │   ├── Correlation-based suggestions
+│   │   ├── Drawdown warnings
+│   │   └── Stablecoin allocation advice
+│   └── Stress Testing Scenarios
+│       ├── Crypto winter
+│       ├── ETH rally
+│       ├── Stablecoin depeg
+│       └── Bull market
 │
 ├── HTTP Handlers
 │   ├── handle_get_holdings()
@@ -91,9 +107,10 @@ ui/src/
 │   ├── HoldingsTab.tsx   - Holdings view container
 │   ├── ExposureTab.tsx   - Exposure view container
 │   ├── SummaryPanel.tsx  - Dashboard with chart & stats
-│   ├── PositionsTable.tsx- Position list with actions
+│   ├── PositionsTable.tsx- Position list with Edit Mode toggle
 │   ├── PortfolioChart.tsx- Line chart for history
 │   ├── InsightCards.tsx  - Dynamic insight display
+│   ├── ExposureSidePanel.tsx - Category detail panel with news feed
 │   └── AddPositionModal.tsx - Position entry form
 │
 ├── store/
@@ -212,11 +229,46 @@ GET /api/insights
 └─────────────────────────┘
 ```
 
+### 4. Risk Analysis Flow
+
+```
+Risk Analysis Flow:
+GET /api/risk/metrics
+→ Check cache: if cached_risk_metrics exists and age < 60s → return cached
+→ Otherwise:
+  → Fetch 30 days historical prices from DeFi Llama (30 sequential HTTP requests)
+  → Calculate daily returns per asset
+  → Build correlation matrix (Pearson correlation)
+  → Calculate volatility scores (7d and 30d annualized)
+  → Calculate drawdown metrics (current and max)
+  → Compute aggregate portfolio risk score
+  → Cache result in AppState (cached_risk_metrics + risk_metrics_cached_at)
+  → Save state
+  → Return PortfolioRiskMetrics
+
+GET /api/recommendations also uses the same cache via get_or_compute_risk_metrics()
+```
+
+### 5. News Feed Flow
+
+```
+News Feed Flow:
+GET /api/news?currencies=BTC,ETH
+→ Get API key: state.cryptopanic_api_key or CRYPTOPANIC_FALLBACK_KEY
+→ Call CryptoPanic Developer API v2:
+  https://cryptopanic.com/api/developer/v2/posts/?auth_token=<key>&currencies=<currencies>&kind=news&public=true
+→ Parse response: extract title, url, source, published_at, votes
+→ Return top 5 news items as JSON
+→ Frontend renders each as a clickable <a> link opening in new tab
+```
+
 ## State Management
 
 ### Backend State (Rust)
 
 ```rust
+// #[serde(default)] ensures new fields don't break deserialization of old state
+#[serde(default)]
 struct AppState {
     // Core data
     positions: HashMap<String, Position>,  // User's holdings
@@ -226,6 +278,14 @@ struct AppState {
     // Market data
     chain_tvl: HashMap<String, ChainTvlData>,  // DeFi Llama data
     dex_pairs: HashMap<String, Vec<DexPairData>>,  // Dexscreener data
+
+    // Configuration
+    api_key: Option<String>,               // CoinGecko API key (set via POST /api/config)
+    cryptopanic_api_key: Option<String>,   // CryptoPanic API key (fallback key built-in)
+
+    // Risk metrics cache (avoids 30 HTTP requests per load)
+    cached_risk_metrics: Option<PortfolioRiskMetrics>,  // Cached result
+    risk_metrics_cached_at: u64,                        // Unix timestamp of last computation
 
     // Timestamps
     last_price_fetch: u64,
@@ -356,7 +416,29 @@ Insights are ranked by:
 
 Health score (0-100) provides quick portfolio assessment.
 
-### 5. Glass-Morphism UI
+### 5. Runtime Configuration
+
+API keys are stored in persistent state via the config endpoint rather than hardcoded in source:
+- `POST /api/config` to set the CoinGecko API key at runtime
+- `GET /api/config` to retrieve (masked) configuration
+- Persisted across process restarts via bincode-serialized state
+
+### 6. Risk Analysis
+
+Portfolio risk is calculated from 30-day historical DeFi Llama prices:
+- Pearson correlation matrix across all portfolio assets
+- Annualized volatility (7-day and 30-day windows)
+- Drawdown tracking (current and maximum)
+- Aggregate risk score combining all metrics
+
+### 7. Stress Testing
+
+Predefined scenario definitions with per-category impact percentages:
+- Each scenario applies different multipliers to asset categories (BTC, ETH, stablecoins, other)
+- Scenarios include: crypto winter, ETH rally, stablecoin depeg, bull market
+- Results show projected portfolio value and per-position impact
+
+### 8. Glass-Morphism UI
 
 The UI uses a modern glass-morphism design:
 - Semi-transparent backgrounds
@@ -367,8 +449,11 @@ The UI uses a modern glass-morphism design:
 ## Security Considerations
 
 ### API Key Storage
-- CoinGecko API key stored in source code (acceptable for demo keys)
-- For production: consider environment variables or secure storage
+- CoinGecko API key is NOT stored in source code
+- Set at runtime via `POST /api/config`
+- Stored in Hyperware's persistent process state (bincode serialized)
+- Masked when retrieved via `GET /api/config`
+- Never logged or exposed in plaintext via API responses
 
 ### Input Validation
 All user inputs are validated against strict bounds:
@@ -412,14 +497,19 @@ CSV exports follow RFC 4180 with additional protections:
 
 ### Caching Strategy
 ```
-┌──────────────┬─────────────┬───────────────────────┐
-│ Data Type    │ Cache TTL   │ Invalidation          │
-├──────────────┼─────────────┼───────────────────────┤
-│ Prices       │ 60 seconds  │ POST /api/refresh     │
-│ Chain TVL    │ 5 minutes   │ POST /market/tvl      │
-│ Snapshots    │ 1 day       │ Auto-created daily    │
-└──────────────┴─────────────┴───────────────────────┘
+┌──────────────────┬─────────────┬───────────────────────┐
+│ Data Type        │ Cache TTL   │ Invalidation          │
+├──────────────────┼─────────────┼───────────────────────┤
+│ Prices           │ 60 seconds  │ POST /api/refresh     │
+│ Chain TVL        │ 5 minutes   │ POST /market/tvl      │
+│ Risk Metrics     │ 60 seconds  │ Auto-expires          │
+│ Snapshots        │ 1 day       │ Auto-created daily    │
+└──────────────────┴─────────────┴───────────────────────┘
 ```
+
+Risk metrics caching is critical for performance: without it, each call to
+`/api/risk/metrics` or `/api/recommendations` triggers 30 sequential HTTP
+requests to DeFi Llama (one per day of historical data).
 
 Price cache TTL is enforced on the `/api/refresh` endpoint:
 - If prices were fetched less than 60 seconds ago, returns cached data
@@ -430,6 +520,15 @@ Price cache TTL is enforced on the `/api/refresh` endpoint:
 - Price fetches batched by CoinGecko ID
 - Positions calculated in single pass
 - Snapshots limited to 365 entries
+
+### Demo Portfolio
+
+A built-in demo portfolio provides 4 preset positions (BTC, ETH, SOL, USDC) for testing.
+Demo positions are tagged with "demo" for identification and cleanup.
+
+- `POST /api/demo/load` - Creates demo positions and fetches current prices
+- `DELETE /api/demo/clear` - Removes all positions tagged "demo"
+- Conflict detection prevents loading demo twice
 
 ## Extensibility Points
 

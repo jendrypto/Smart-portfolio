@@ -1,6 +1,5 @@
 import usePortfolioStore from '../store/portfolio';
 import SummaryPanel from './SummaryPanel';
-import InsightCards from './InsightCards';
 import PositionsTable from './PositionsTable';
 import EmptyStateView from './EmptyStateView';
 import DemoBanner from './DemoBanner';
@@ -25,9 +24,6 @@ function HoldingsTab() {
     <div className="holdings-tab">
       {/* Demo Banner - show only if demo positions present */}
       {hasDemoPositions && <DemoBanner />}
-
-      {/* Insight Cards */}
-      <InsightCards />
 
       {/* Summary Panel with Chart and Stats */}
       {summary && <SummaryPanel summary={summary} snapshots={snapshots} />}

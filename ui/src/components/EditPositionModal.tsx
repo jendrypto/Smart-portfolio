@@ -1,90 +1,58 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import usePortfolioStore from '../store/portfolio';
-import { AddPositionRequest, TokenSearchResult } from '../types/Portfolio';
+import { AddPositionRequest } from '../types/Portfolio';
 
 const CHAINS = ['Ethereum', 'Arbitrum', 'Optimism', 'Polygon', 'Base', 'Avalanche', 'BNB Chain', 'Solana', 'Bitcoin'];
 
-function AddPositionModal() {
+function EditPositionModal() {
   const {
-    setAddModalOpen,
-    addPosition,
-    searchTokens,
-    tokenSearchResults,
-    clearTokenSearch,
+    positions,
+    editingPositionId,
+    setEditingPositionId,
+    updatePosition,
     isLoading,
-    fetchTokenPrice,
   } = usePortfolioStore();
 
-  const [formData, setFormData] = useState<AddPositionRequest>({
+  const position = positions.find((p) => p.position.id === editingPositionId)?.position;
+
+  const [formData, setFormData] = useState<Partial<AddPositionRequest>>({
     token_symbol: '',
     token_name: '',
     chain: 'Ethereum',
     quantity: '',
     entry_price_usd: '',
-    entry_date: new Date().toISOString().split('T')[0],
+    entry_date: '',
+    user_note: '',
   });
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showResults, setShowResults] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [isFetchingPrice, setIsFetchingPrice] = useState(false);
 
-  // Use ref to track if token was just selected - doesn't trigger re-renders
-  const skipNextSearchRef = useRef(false);
-
-  // Debounced search - skip if token was just selected
+  // Populate form when position changes
   useEffect(() => {
-    if (skipNextSearchRef.current) {
-      skipNextSearchRef.current = false;
-      return;
+    if (position) {
+      setFormData({
+        token_symbol: position.token_symbol,
+        token_name: position.token_name,
+        chain: position.chain,
+        quantity: position.quantity,
+        entry_price_usd: position.entry_price_usd,
+        entry_date: position.entry_date || '',
+        user_note: position.user_note || '',
+      });
     }
+  }, [position]);
 
-    const timer = setTimeout(() => {
-      if (searchQuery.length >= 1) {
-        searchTokens(searchQuery);
-        setShowResults(true);
-      } else {
-        clearTokenSearch();
-        setShowResults(false);
-      }
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery, searchTokens, clearTokenSearch]);
-
-  const handleSelectToken = async (token: TokenSearchResult) => {
-    // Set ref flag to skip next search trigger (ref doesn't cause re-render)
-    skipNextSearchRef.current = true;
-    setShowResults(false);
-    clearTokenSearch();
-    setSearchQuery(token.name);
-    setFormData({
-      ...formData,
-      token_identifier: token.id,
-      token_symbol: token.symbol.toUpperCase(),
-      token_name: token.name,
-    });
-
-    // Fetch and auto-populate current price
-    setIsFetchingPrice(true);
-    const price = await fetchTokenPrice(token.id);
-    setIsFetchingPrice(false);
-
-    if (price !== null) {
-      setFormData(prev => ({
-        ...prev,
-        entry_price_usd: price.toString(),
-      }));
-    }
-  };
+  if (!position) {
+    return null;
+  }
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
 
-    if (!formData.token_symbol.trim()) {
+    if (!formData.token_symbol?.trim()) {
       newErrors.token_symbol = 'Symbol is required';
     }
-    if (!formData.token_name.trim()) {
+    if (!formData.token_name?.trim()) {
       newErrors.token_name = 'Name is required';
     }
     if (!formData.quantity || parseFloat(formData.quantity) <= 0) {
@@ -102,59 +70,31 @@ function AddPositionModal() {
     e.preventDefault();
     if (!validate()) return;
 
-    const success = await addPosition(formData);
+    const success = await updatePosition(editingPositionId!, formData);
     if (success) {
-      setAddModalOpen(false);
+      setEditingPositionId(null);
     }
   };
 
   const handleClose = () => {
-    clearTokenSearch();
-    setAddModalOpen(false);
+    setEditingPositionId(null);
   };
 
   return (
     <div className="modal-overlay" onClick={handleClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Add Position</h2>
+          <h2>Edit Position</h2>
           <button className="modal-close" onClick={handleClose}>×</button>
         </div>
 
         <form onSubmit={handleSubmit} className="modal-form">
-          <div className="form-group">
-            <label>Search Token</label>
-            <div className="search-container">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by name or symbol..."
-                autoFocus
-              />
-              {showResults && tokenSearchResults.length > 0 && (
-                <div className="search-results">
-                  {tokenSearchResults.map((token) => (
-                    <div
-                      key={token.id}
-                      className="search-result"
-                      onClick={() => handleSelectToken(token)}
-                    >
-                      <span className="result-name">{token.name}</span>
-                      <span className="result-symbol">{token.symbol.toUpperCase()}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
           <div className="form-row">
             <div className="form-group">
               <label>Symbol *</label>
               <input
                 type="text"
-                value={formData.token_symbol}
+                value={formData.token_symbol || ''}
                 onChange={(e) => setFormData({ ...formData, token_symbol: e.target.value.toUpperCase() })}
                 placeholder="ETH"
                 className={errors.token_symbol ? 'error' : ''}
@@ -166,7 +106,7 @@ function AddPositionModal() {
               <label>Name *</label>
               <input
                 type="text"
-                value={formData.token_name}
+                value={formData.token_name || ''}
                 onChange={(e) => setFormData({ ...formData, token_name: e.target.value })}
                 placeholder="Ethereum"
                 className={errors.token_name ? 'error' : ''}
@@ -178,7 +118,7 @@ function AddPositionModal() {
           <div className="form-group">
             <label>Chain</label>
             <select
-              value={formData.chain}
+              value={formData.chain || 'Ethereum'}
               onChange={(e) => setFormData({ ...formData, chain: e.target.value })}
             >
               {CHAINS.map((chain) => (
@@ -193,7 +133,7 @@ function AddPositionModal() {
               <input
                 type="number"
                 step="any"
-                value={formData.quantity}
+                value={formData.quantity || ''}
                 onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
                 placeholder="1.5"
                 className={errors.quantity ? 'error' : ''}
@@ -202,11 +142,11 @@ function AddPositionModal() {
             </div>
 
             <div className="form-group">
-              <label>Entry Price (USD) * {isFetchingPrice && <span className="fetching-price">(fetching...)</span>}</label>
+              <label>Entry Price (USD) *</label>
               <input
                 type="number"
                 step="any"
-                value={formData.entry_price_usd}
+                value={formData.entry_price_usd || ''}
                 onChange={(e) => setFormData({ ...formData, entry_price_usd: e.target.value })}
                 placeholder="3000.00"
                 className={errors.entry_price_usd ? 'error' : ''}
@@ -239,7 +179,7 @@ function AddPositionModal() {
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={isLoading}>
-              {isLoading ? 'Adding...' : 'Add Position'}
+              {isLoading ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
         </form>
@@ -248,4 +188,4 @@ function AddPositionModal() {
   );
 }
 
-export default AddPositionModal;
+export default EditPositionModal;

@@ -14,7 +14,7 @@ url = "2.5"
 http = "1.0"
 anyhow = "1.0"
 rust_decimal = { version = "1.33", features = ["serde", "serde-with-str"] }
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "alloc"] }
 
 [profile.release]
 panic = "abort"

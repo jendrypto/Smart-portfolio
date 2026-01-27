@@ -50,6 +50,14 @@ Get a free API key from [CoinGecko](https://www.coingecko.com/api/pricing):
 3. Generate a Demo API key
 4. Note: Free tier allows ~30 calls/minute
 
+### 5. CryptoPanic API Key (Optional)
+
+A built-in fallback key is included, so news works out of the box. To use your own key:
+
+1. Create an account at [CryptoPanic](https://cryptopanic.com)
+2. Go to API section and get a Developer key
+3. Configure after deployment (see below)
+
 ---
 
 ## Installation
@@ -67,14 +75,32 @@ cd /path/to/smart-portfolio
 
 ### Configure API Key
 
-Edit the API key in `smart-portfolio/src/lib.rs`:
+After deploying the app, set your CoinGecko API key via the config endpoint:
 
-```rust
-// Line ~339
-const COINGECKO_API_KEY: &str = "your-api-key-here";
+```bash
+curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "your-coingecko-api-key"}'
 ```
 
-Replace `your-api-key-here` with your CoinGecko API key.
+Verify the key is configured:
+
+```bash
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config
+# Returns: {"api_key_configured": true, "api_key_masked": "your...here"}
+```
+
+The API key is stored in the app's persistent state and survives restarts.
+
+### Configure CryptoPanic API Key (Optional)
+
+News works out of the box with a built-in fallback key. To use your own:
+
+```bash
+curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"cryptopanic_api_key": "your-cryptopanic-api-key"}'
+```
 
 ### Install Frontend Dependencies
 
@@ -293,10 +319,42 @@ npm install
 - Check the URL path includes the full package path
 - Verify the process is running: `kit ps`
 
-**Problem:** Prices not updating
+**Problem:** Prices not updating / Token search returns empty
 - Check CoinGecko API key is valid
 - Check API rate limits (30/min for free tier)
 - Look for errors in console output
+- Check terminal logs for: `doesn't have capability to message process http-client:distro:sys`
+
+**Problem:** "doesn't have capability to message process http-client:distro:sys"
+
+This error occurs when the package cannot make outbound HTTP requests. Fix by ensuring `pkg/manifest.json` includes the http-client capability:
+
+```json
+{
+  "request_capabilities": [
+    "http-server:distro:sys",
+    "http-client:distro:sys",
+    "vfs:distro:sys"
+  ]
+}
+```
+
+After updating, rebuild and redeploy:
+```bash
+kit build
+kit start-package
+```
+
+**Problem:** HTTP requests timeout or fail silently
+
+The HTTP client uses milliseconds for timeouts, not seconds. If you're making custom HTTP requests, use:
+```rust
+// Correct: 30 seconds = 30000 milliseconds
+send_request_await_response(Method::GET, url, None, 30000, vec![])
+
+// Wrong: This is only 30 milliseconds!
+send_request_await_response(Method::GET, url, None, 30, vec![])
+```
 
 ### Connection Issues
 
@@ -362,7 +420,7 @@ kit start-package
 
 ### Security
 
-1. **API Keys**: Consider moving to environment variables
+1. **API Keys**: Configured at runtime via `POST /api/config` and stored in persistent state. Never hardcoded in source.
 2. **HTTPS**: Use a reverse proxy for production
 3. **Updates**: Keep dependencies updated
 

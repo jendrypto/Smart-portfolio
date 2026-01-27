@@ -45,44 +45,41 @@ This starts Vite dev server at `http://localhost:5173` with hot module replaceme
 
 ```
 smart-portfolio/src/lib.rs
-│
-├── Lines 1-100: Imports and domain types
-│   ├── Position, CanonicalId, IdentifierKind
-│   ├── PriceData, DailySnapshot
-│   ├── ExposureEntry, ChainExposure
-│   └── Insight, InsightType, InsightPriority
-│
-├── Lines 100-250: API response types
-│   ├── PositionWithDerived
-│   ├── PortfolioSummary
-│   ├── HoldingsResponse, ExposureResponse
-│   └── MarketDataResponse
-│
-├── Lines 250-350: Configuration and state
-│   ├── Constants (API URLs, cache TTL)
-│   └── AppState struct
-│
-├── Lines 350-600: CoinGecko integration
-│   ├── CoinGecko types
-│   ├── search_coingecko_tokens()
-│   └── fetch_prices_from_coingecko()
-│
-├── Lines 600-850: DeFi Llama & Dexscreener
-│   ├── DeFi Llama types and functions
-│   └── Dexscreener types and functions
-│
-├── Lines 850-1100: Analytics engine
-│   ├── calculate_positions_with_derived()
-│   ├── calculate_portfolio_summary()
-│   ├── generate_insights()
-│   └── calculate_exposure()
-│
-├── Lines 1100-1600: HTTP handlers
-│   └── All handle_*() functions
-│
-└── Lines 1600-end: Router and main loop
-    ├── handle_http_request()
-    └── init()
+├── Imports and URL encoding helpers
+├── Domain Types
+│   ├── Positions (Position, CanonicalId, IdentifierKind)
+│   ├── Pricing (PriceData, PriceSource)
+│   ├── Chain/Protocol Data (ChainTvlData, ProtocolData)
+│   ├── DEX Data (DexPairData)
+│   ├── Snapshots (DailySnapshot)
+│   ├── Analytics / Exposure (ExposureCategory, ExposureEntry, ChainExposure)
+│   ├── Insights (InsightType, InsightPriority, Insight)
+│   ├── Risk Metrics (CorrelationMatrix, VolatilityScore, DrawdownData)
+│   ├── Recommendations (ActionableRecommendation, RecommendedAction)
+│   └── Scenarios (Scenario, AssetImpact)
+├── API Request / Response Types
+├── Configuration and State
+│   ├── Constants (cache TTLs, API URLs, validation limits)
+│   ├── AppState struct (positions, prices, snapshots, config)
+│   └── State persistence (load_state, save_state, migrate)
+├── Demo Portfolio Generator
+├── External API Integrations
+│   ├── CoinGecko (search, prices, top tokens)
+│   ├── DeFi Llama (chain TVL, token prices, historical prices)
+│   └── Dexscreener (pair search, token price)
+├── Risk Metrics Calculation
+│   ├── Historical price fetching
+│   ├── Returns and volatility calculation
+│   ├── Pearson correlation
+│   └── Drawdown analysis
+├── Recommendations Engine
+├── Stress Testing Scenarios
+├── Analytics (positions, summary, insights, exposure)
+├── HTTP Response Helpers
+├── Route Handlers (handle_* functions)
+├── Configuration Handlers (config get/set)
+├── HTTP Request Router
+└── Main Loop (init, server setup, message loop)
 ```
 
 ### Frontend Structure
@@ -341,9 +338,33 @@ import MyComponent from './MyComponent';
 <MyComponent />
 ```
 
+### Adding a New Risk Metric
+
+1. Define the metric type in the "Risk Metrics" domain types section
+2. Add calculation logic in the risk metrics section (near `calculate_risk_metrics`)
+3. Include in `PortfolioRiskMetrics` response struct
+4. Add TypeScript interface in `ui/src/types/Portfolio.ts`
+5. Update the `PortfolioRiskMetrics` interface to include new field
+
+### Adding a New Stress Test Scenario
+
+1. Add scenario definition in `calculate_scenarios()` function's `scenario_definitions` vec
+2. Define per-category impact percentages (ETH, BTC, Alt L1s, Protocol Tokens, Stablecoins, Other)
+3. No frontend changes needed - scenarios are rendered dynamically
+
 ---
 
 ## Security Patterns
+
+### API Key Configuration
+
+API keys are configured at runtime via the `/api/config` endpoint and stored in
+Hyperware's persistent process state.
+
+- **CoinGecko**: Set via `POST /api/config` with `{"api_key": "your-key"}`; no hardcoded fallback
+- **CryptoPanic**: Set via `POST /api/config` with `{"cryptopanic_api_key": "your-key"}`; a hardcoded fallback key (`CRYPTOPANIC_FALLBACK_KEY`) is included so news works out of the box
+- Check: `GET /api/config` returns masked key status
+- Keys persist across restarts via bincode-serialized state
 
 ### Input Validation
 
@@ -400,6 +421,44 @@ This prevents:
 - Query injection attacks
 - Malformed requests from special characters (e.g., `+`, `/`, `&`)
 - API errors from unencoded symbols
+
+### HTTP Client Configuration
+
+To make outbound HTTP requests (e.g., to CoinGecko, DeFi Llama), the package requires the `http-client:distro:sys` capability in `pkg/manifest.json`:
+
+```json
+{
+  "request_capabilities": [
+    "http-server:distro:sys",
+    "http-client:distro:sys",
+    "vfs:distro:sys"
+  ]
+}
+```
+
+**Important notes about the HTTP client:**
+
+1. **Timeout is in milliseconds**, not seconds:
+```rust
+// Correct: 30 seconds
+send_request_await_response(Method::GET, url, None, 30000, vec![])
+
+// Wrong: Only 30 milliseconds!
+send_request_await_response(Method::GET, url, None, 30, vec![])
+```
+
+2. **Use Hyperware's query_params()** for accessing query parameters:
+```rust
+fn handle_http_request(state: &mut AppState, req: &IncomingHttpRequest, body: &[u8]) {
+    // Use Hyperware's built-in query parameter parsing
+    let query_params = req.query_params();
+
+    // Access parameters directly
+    let search_query = query_params.get("q").map(|s| s.as_str()).unwrap_or("");
+}
+```
+
+3. **Debug endpoint** available at `/api/debug/http` to test outbound connectivity.
 
 ### CSV Export Safety
 
@@ -587,11 +646,14 @@ fn init(our: Address) {
 ```
 
 **Migration Guidelines:**
-- Make new fields `Option<T>` for backwards compatibility
+- The `AppState` struct uses `#[serde(default)]` at the struct level, so new fields automatically default when deserializing old state
+- Make new fields `Option<T>` or use types that implement `Default` for backwards compatibility
 - Check for `None` before migrating
 - Only save state if actually migrated
 - Log migration for debugging
 - Call migration in `init()` after loading state
+
+**Important:** Without `#[serde(default)]`, adding new fields to `AppState` will cause old serialized state (bincode) to fail deserialization. The `load_state()` fallback resets ALL state, which loses existing data. Always keep the `#[serde(default)]` attribute.
 
 ---
 
@@ -656,6 +718,10 @@ Use the defined CSS variables for consistency:
 - [ ] Refresh prices
 - [ ] Refresh prices within 60 seconds (should return cached)
 - [ ] Sort positions by value/P&L/allocation
+- [ ] Verify pencil icons are hidden by default (edit mode off)
+- [ ] Click "Edit" button in header → pencil icons appear
+- [ ] Click pencil → edit/delete actions appear
+- [ ] Click "Done" → pencils disappear, active selection cleared
 
 **Input Validation:**
 - [ ] Add position with symbol > 20 chars (should fail)
@@ -668,11 +734,21 @@ Use the defined CSS variables for consistency:
 - [ ] View asset exposure chart
 - [ ] View chain exposure
 - [ ] Verify percentages add to 100%
+- [ ] Click on a category (e.g., BTC) → side panel opens with news
+- [ ] Verify up to 5 news items appear
+- [ ] Click a news headline → opens article in new tab
+- [ ] Verify news shows source, date, and vote counts
 
 **Insights:**
 - [ ] Verify insights appear based on portfolio state
 - [ ] Test concentration warning (>50% in one position)
 - [ ] Test diversification insights
+
+**Risk Analysis:**
+- [ ] Navigate to Risk & Analysis tab → metrics load
+- [ ] Refresh the tab within 60 seconds → should load much faster (cached)
+- [ ] Verify correlation matrix, volatility scores, and drawdowns display
+- [ ] Check recommendations tab also loads quickly (shares risk cache)
 
 **Data Export:**
 - [ ] Export positions CSV
@@ -684,12 +760,37 @@ Use the defined CSS variables for consistency:
 
 ```bash
 # Test each endpoint
-curl http://localhost:8080/.../api/holdings
-curl http://localhost:8080/.../api/exposure
-curl http://localhost:8080/.../api/insights
-curl http://localhost:8080/.../api/market
-curl http://localhost:8080/.../api/tokens/search?q=eth
-curl http://localhost:8080/.../api/dex/search?q=pepe
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/holdings
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/exposure
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/insights
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/market
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/tokens/search?q=eth
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/dex/search?q=pepe
+
+# Risk Analysis (first call may be slow; second call within 60s returns cached)
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/risk/metrics
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/recommendations
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/scenarios
+
+# News (CryptoPanic)
+curl "http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/news?currencies=BTC"
+curl "http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/news?currencies=BTC,ETH"
+
+# Configuration
+curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "your-key"}'
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config
+
+# Demo Portfolio
+curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/demo/load
+curl -X DELETE http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/demo/clear
+
+# Top Tokens
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/tokens/top
+
+# Debug
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/debug/http
 ```
 
 ---

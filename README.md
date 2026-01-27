@@ -25,11 +25,31 @@ AI-powered portfolio analysis that provides actionable insights:
 - Liquidity warnings (from DEX data)
 - Portfolio health scoring (0-100)
 
+### Risk Analysis
+- **Portfolio Risk Score**: Aggregate risk assessment (0-100)
+- **Correlation Matrix**: Asset correlation analysis using Pearson coefficients
+- **Volatility Tracking**: 7-day and 30-day annualized volatility scores per asset
+- **Drawdown Analysis**: Current and max drawdown monitoring over 30-day windows
+- **Stress Testing**: Scenario-based portfolio impact simulations (crypto winter, bull run, ETH rally, stablecoin depeg)
+
+### Actionable Recommendations
+- Prioritized actions (critical/high/medium/low)
+- Categories: risk mitigation, opportunities, rebalancing, alerts
+- Specific rebalance/sell/buy suggestions with estimated impact
+
+### Live News Feed
+- **CryptoPanic Integration**: Real-time crypto news per token/category via the CryptoPanic Developer API v2
+- Shows the 5 most recent articles in the Exposure side panel
+- Each headline is clickable, opening the source article in a new tab
+- Displays source, date, and community sentiment votes
+- Works out of the box with a built-in fallback API key
+
 ### Multi-Source Data
-Integrated with three major data providers:
+Integrated with four data providers:
 - **CoinGecko**: Token prices, market caps, 24h changes
-- **DeFi Llama**: Chain TVL data, protocol information
+- **DeFi Llama**: Chain TVL data, protocol information, historical prices
 - **Dexscreener**: DEX prices, liquidity, volume for newer tokens
+- **CryptoPanic**: Real-time crypto news and sentiment (Developer API v2)
 
 ### Security & Data Integrity
 - **Input Validation**: Strict bounds checking on all user inputs
@@ -81,6 +101,7 @@ smart-portfolio/
 │   ├── SETUP.md            # Setup guide
 │   └── DEVELOPMENT.md      # Development guide
 ├── pkg/                    # Built package output
+├── CHANGELOG.md            # Version history and recent changes
 └── metadata.json           # Hyperware package metadata
 ```
 
@@ -90,6 +111,7 @@ smart-portfolio/
 - [Architecture](docs/ARCHITECTURE.md) - System design and data flow
 - [Setup Guide](docs/SETUP.md) - Installation and deployment
 - [Development Guide](docs/DEVELOPMENT.md) - Contributing and extending
+- [Changelog](CHANGELOG.md) - Version history and recent changes
 
 ## Technology Stack
 
@@ -112,16 +134,57 @@ smart-portfolio/
 - CoinGecko API (requires API key)
 - DeFi Llama API (free, no key)
 - Dexscreener API (free, no key)
+- CryptoPanic Developer API v2 (API key included as fallback; can be overridden via config)
 
 ## Configuration
 
-### API Keys
-The CoinGecko API key is configured in `smart-portfolio/src/lib.rs`:
-```rust
-const COINGECKO_API_KEY: &str = "your-api-key-here";
+### Package Capabilities
+
+The package requires the following Hyperware capabilities in `pkg/manifest.json`:
+
+```json
+{
+  "request_capabilities": [
+    "http-server:distro:sys",
+    "http-client:distro:sys",
+    "vfs:distro:sys"
+  ]
+}
 ```
 
+**Important:** The `http-client:distro:sys` capability is required for fetching live prices from CoinGecko and other external APIs. Without it, all API calls will fail silently.
+
+### API Keys
+
+The CoinGecko API key is configured at runtime via the config endpoint:
+
+```bash
+# Set your API key
+curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "your-coingecko-api-key"}'
+
+# Verify configuration
+curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config
+```
+
+The key is stored in persistent state and survives restarts.
 DeFi Llama and Dexscreener do not require API keys.
+
+**CryptoPanic API Key** (optional): A built-in fallback key is included so news works immediately. To use your own key:
+
+```bash
+curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"cryptopanic_api_key": "your-cryptopanic-api-key"}'
+```
+
+### HTTP Client Notes
+
+When making HTTP requests in Hyperware:
+- Use `hyperware_process_lib::http::client::send_request_await_response`
+- Timeout is specified in **milliseconds** (not seconds): use `30000` for 30 seconds
+- Use `req.query_params()` to access parsed query parameters from the request
 
 ## Privacy
 
@@ -137,6 +200,7 @@ The application includes several security hardening measures:
 - **CSV Export Safety**: Exports follow RFC 4180 with CSV injection prevention
 - **Canonical Identifiers**: Tokens are identified using a consistent format (`coingecko:<id>` or `address:<chain>:<addr>`) for reliable price lookups
 - **Price Cache TTL**: 60-second cache prevents excessive API calls while ensuring fresh data
+- **Risk Metrics Cache**: 60-second backend cache for risk analysis, eliminating 30 redundant HTTP requests per load
 
 ## License
 

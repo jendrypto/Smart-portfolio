@@ -17,10 +17,11 @@ import {
   ChainTvlData,
   PositionMarketData,
   TopToken,
+  PortfolioRiskMetrics,
+  ActionableRecommendation,
+  Scenario,
 } from '../types/Portfolio';
-
-// Use empty string for same-origin API calls - works regardless of deployment path
-const API_BASE = '';
+import { API_BASE } from '../utils/api';
 
 export interface PortfolioStore {
   // Data
@@ -37,6 +38,15 @@ export interface PortfolioStore {
   chainTvl: ChainTvlData[];
   positionMarketData: PositionMarketData[];
   topTokens: TopToken[];
+
+  // Risk Analysis data
+  riskMetrics: PortfolioRiskMetrics | null;
+  recommendations: ActionableRecommendation[];
+  scenarios: Scenario[];
+  riskDataLastFetched: number | null;
+  isLoadingRisk: boolean;
+  isLoadingRecommendations: boolean;
+  isLoadingScenarios: boolean;
 
   // UI State
   activeTab: 'holdings' | 'exposure';
@@ -71,6 +81,12 @@ export interface PortfolioStore {
   clearDexSearch: () => void;
   fetchTopTokens: () => Promise<void>;
 
+  // Risk Analysis API actions
+  fetchRiskMetrics: () => Promise<void>;
+  fetchRecommendations: () => Promise<void>;
+  fetchScenarios: () => Promise<void>;
+  fetchAllRiskData: () => Promise<void>;
+
   // Demo portfolio
   loadDemoPortfolio: () => Promise<boolean>;
   clearDemoPortfolio: () => Promise<boolean>;
@@ -91,6 +107,15 @@ const usePortfolioStore = create<PortfolioStore>((set, get) => ({
   chainTvl: [],
   positionMarketData: [],
   topTokens: [],
+
+  // Risk Analysis initial state
+  riskMetrics: null,
+  recommendations: [],
+  scenarios: [],
+  riskDataLastFetched: null,
+  isLoadingRisk: false,
+  isLoadingRecommendations: false,
+  isLoadingScenarios: false,
 
   activeTab: 'holdings',
   isLoading: false,
@@ -305,6 +330,80 @@ const usePortfolioStore = create<PortfolioStore>((set, get) => ({
     } catch (e) {
       console.error('Top tokens fetch error:', e);
     }
+  },
+
+  // Risk Analysis API Actions
+  fetchRiskMetrics: async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/risk/metrics`);
+      if (!response.ok) throw new Error('Failed to fetch risk metrics');
+      const data: PortfolioRiskMetrics = await response.json();
+      set({ riskMetrics: data });
+    } catch (e) {
+      console.error('Risk metrics fetch error:', e);
+    }
+  },
+
+  fetchRecommendations: async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/recommendations`);
+      if (!response.ok) throw new Error('Failed to fetch recommendations');
+      const data = await response.json();
+      set({ recommendations: data.recommendations });
+    } catch (e) {
+      console.error('Recommendations fetch error:', e);
+    }
+  },
+
+  fetchScenarios: async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/scenarios`);
+      if (!response.ok) throw new Error('Failed to fetch scenarios');
+      const data = await response.json();
+      set({ scenarios: data.scenarios });
+    } catch (e) {
+      console.error('Scenarios fetch error:', e);
+    }
+  },
+
+  fetchAllRiskData: async () => {
+    const { riskDataLastFetched, riskMetrics } = get();
+    // Skip if fetched within last 5 minutes and data exists
+    if (riskDataLastFetched && riskMetrics && Date.now() - riskDataLastFetched < 5 * 60 * 1000) {
+      return;
+    }
+
+    set({ isLoadingRisk: true, isLoadingRecommendations: true, isLoadingScenarios: true });
+
+    const results = await Promise.allSettled([
+      fetch(`${API_BASE}/api/risk/metrics`).then(async (r) => {
+        if (!r.ok) throw new Error('Failed to fetch risk metrics');
+        const data: PortfolioRiskMetrics = await r.json();
+        set({ riskMetrics: data, isLoadingRisk: false });
+      }),
+      fetch(`${API_BASE}/api/recommendations`).then(async (r) => {
+        if (!r.ok) throw new Error('Failed to fetch recommendations');
+        const data = await r.json();
+        set({ recommendations: data.recommendations, isLoadingRecommendations: false });
+      }),
+      fetch(`${API_BASE}/api/scenarios`).then(async (r) => {
+        if (!r.ok) throw new Error('Failed to fetch scenarios');
+        const data = await r.json();
+        set({ scenarios: data.scenarios, isLoadingScenarios: false });
+      }),
+    ]);
+
+    // Clear loading flags for any that failed
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        console.error('Risk data fetch error:', result.reason);
+        if (i === 0) set({ isLoadingRisk: false });
+        if (i === 1) set({ isLoadingRecommendations: false });
+        if (i === 2) set({ isLoadingScenarios: false });
+      }
+    });
+
+    set({ riskDataLastFetched: Date.now() });
   },
 
   loadDemoPortfolio: async () => {

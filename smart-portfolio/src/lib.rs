@@ -12,6 +12,7 @@ use hyperware_process_lib::{
 use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
 use std::str::FromStr;
+use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -236,6 +237,8 @@ pub enum ExposureCategory {
     ETH,
     BTC,
     Stablecoins,
+    AltL1s,
+    ProtocolTokens,
     Other,
 }
 
@@ -245,12 +248,14 @@ impl ExposureCategory {
             ExposureCategory::ETH => "ETH",
             ExposureCategory::BTC => "BTC",
             ExposureCategory::Stablecoins => "Stablecoins",
+            ExposureCategory::AltL1s => "Alt L1s",
+            ExposureCategory::ProtocolTokens => "Protocol Tokens",
             ExposureCategory::Other => "Other",
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ConfidenceLevel {
     High,
     Medium,
@@ -258,11 +263,19 @@ pub enum ConfidenceLevel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfidenceBreakdown {
+    pub level: ConfidenceLevel,
+    pub value_usd: f64,
+    pub percentage: f64,  // percentage within this category
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExposureEntry {
     pub category: String,
     pub value_usd: f64,
     pub percentage: f64,
-    pub confidence: ConfidenceLevel,
+    pub confidence: ConfidenceLevel,  // Keep for backwards compat (lowest)
+    pub confidence_breakdown: Vec<ConfidenceBreakdown>,
     pub notes: String,
 }
 
@@ -271,6 +284,7 @@ pub struct ChainExposure {
     pub chain: String,
     pub value_usd: f64,
     pub percentage: f64,
+    pub chain_type: String,  // "L1" or "L2"
 }
 
 // ============================================================================
@@ -400,6 +414,124 @@ pub struct InsightsResponse {
     pub insights: Vec<Insight>,
     pub generated_at: u64,
     pub portfolio_health_score: u8,  // 0-100 score
+}
+
+// ============================================================================
+// Domain Types - Risk Metrics
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PricePoint {
+    pub timestamp: u64,
+    pub price: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrelationMatrix {
+    pub assets: Vec<String>,
+    pub matrix: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VolatilityScore {
+    pub asset: String,
+    pub symbol: String,
+    pub volatility_7d: f64,
+    pub volatility_30d: f64,
+    pub volatility_rank: String, // "low", "medium", "high", "extreme"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrawdownData {
+    pub asset: String,
+    pub symbol: String,
+    pub current_drawdown: f64,
+    pub max_drawdown_30d: f64,
+    pub peak_price: f64,
+    pub trough_price: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortfolioRiskMetrics {
+    pub correlation_matrix: CorrelationMatrix,
+    pub volatility_scores: Vec<VolatilityScore>,
+    pub drawdowns: Vec<DrawdownData>,
+    pub portfolio_volatility: f64,
+    pub risk_score: u8,
+    pub generated_at: u64,
+}
+
+// ============================================================================
+// Domain Types - Actionable Recommendations
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecommendedAction {
+    pub action_type: String,
+    pub label: String,
+    pub from_asset: Option<String>,
+    pub to_asset: Option<String>,
+    pub percentage: Option<f64>,
+    pub estimated_value: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionableRecommendation {
+    pub id: String,
+    pub priority: String,
+    pub category: String,
+    pub title: String,
+    pub description: String,
+    pub impact: String,
+    pub action: Option<RecommendedAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecommendationsResponse {
+    pub recommendations: Vec<ActionableRecommendation>,
+    pub risk_score: u8,
+    pub generated_at: u64,
+}
+
+// ============================================================================
+// Domain Types - Stress Testing Scenarios
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetImpact {
+    pub symbol: String,
+    pub current_value: f64,
+    pub scenario_value: f64,
+    pub percent_change: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scenario {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub portfolio_impact: f64,
+    pub affected_assets: Vec<AssetImpact>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScenariosResponse {
+    pub scenarios: Vec<Scenario>,
+    pub current_value: f64,
+}
+
+// ============================================================================
+// Domain Types - News (CryptoPanic)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewsItem {
+    pub title: String,
+    pub url: String,
+    pub source: String,
+    pub published_at: String,
+    pub positive_votes: i32,
+    pub negative_votes: i32,
 }
 
 // ============================================================================
@@ -538,7 +670,6 @@ struct CoinGeckoMarketCoin {
 // ============================================================================
 
 const COINGECKO_CACHE_TTL_SECS: u64 = 60; // 60 second cache
-const COINGECKO_API_KEY: &str = "CG-2qKB1Q4fDxnQBLt6rYR7tizq";
 
 // DeFi Llama API (free, no key needed)
 const DEFILLAMA_API_BASE: &str = "https://api.llama.fi";
@@ -556,6 +687,7 @@ const MAX_TAG_LENGTH: usize = 50;
 const MAX_TAGS_COUNT: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 struct AppState {
     positions: HashMap<String, Position>,
     prices: HashMap<String, PriceData>, // keyed by coingecko id or contract address
@@ -565,6 +697,17 @@ struct AppState {
     chain_tvl: HashMap<String, ChainTvlData>, // keyed by chain name
     dex_pairs: HashMap<String, Vec<DexPairData>>, // keyed by token symbol/address
     last_tvl_fetch: u64,
+    // Configuration (set via POST /api/config)
+    api_key: Option<String>, // CoinGecko API key
+    cryptopanic_api_key: Option<String>, // CryptoPanic API key
+    // Risk metrics cache (avoids 30 HTTP requests per load)
+    cached_risk_metrics: Option<PortfolioRiskMetrics>,
+    risk_metrics_cached_at: u64,
+}
+
+/// Get the configured CoinGecko API key, or empty string if not set
+fn get_api_key(state: &AppState) -> String {
+    state.api_key.clone().unwrap_or_default()
 }
 
 // ============================================================================
@@ -572,10 +715,7 @@ struct AppState {
 // ============================================================================
 
 fn get_demo_positions() -> Vec<Position> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let now = get_current_timestamp();
 
     vec![
         Position {
@@ -678,54 +818,122 @@ fn get_current_timestamp() -> u64 {
 }
 
 fn get_current_date() -> String {
-    let now = get_current_timestamp();
-    let days_since_epoch = now / 86400;
-    // Simple date calculation (approximate, but good enough for daily snapshots)
-    let year = 1970 + (days_since_epoch / 365);
-    let day_of_year = days_since_epoch % 365;
-    let month = (day_of_year / 30) + 1;
-    let day = (day_of_year % 30) + 1;
-    format!("{:04}-{:02}-{:02}", year, month.min(12), day.min(28))
+    let timestamp = get_current_timestamp() as i64;
+    DateTime::from_timestamp(timestamp, 0)
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "1970-01-01".to_string())
 }
 
 // ============================================================================
 // CoinGecko Integration
 // ============================================================================
 
-fn get_exposure_category(symbol: &str, coingecko_id: Option<&str>) -> (ExposureCategory, ConfidenceLevel, String) {
+fn get_exposure_category(symbol: &str, coingecko_id: Option<&str>, token_name: &str) -> (ExposureCategory, ConfidenceLevel, String) {
     let symbol_upper = symbol.to_uppercase();
     let cg_id = coingecko_id.unwrap_or("");
+    let name_lower = token_name.to_lowercase();
 
-    // ETH exposure
-    if symbol_upper == "ETH" || cg_id == "ethereum" {
+    // Rule 1: ETH - High Confidence
+    if symbol_upper == "ETH" || cg_id == "ethereum" || name_lower == "ethereum" {
         return (ExposureCategory::ETH, ConfidenceLevel::High, "Direct ETH holding".to_string());
     }
-    if symbol_upper == "WETH" || cg_id == "weth" {
-        return (ExposureCategory::ETH, ConfidenceLevel::Medium, "Wrapped ETH (1:1 backing)".to_string());
-    }
-    if symbol_upper == "STETH" || cg_id == "staked-ether" {
-        return (ExposureCategory::ETH, ConfidenceLevel::Medium, "Staked ETH (Lido)".to_string());
-    }
-    if symbol_upper == "RETH" || cg_id == "rocket-pool-eth" {
-        return (ExposureCategory::ETH, ConfidenceLevel::Medium, "Staked ETH (Rocket Pool)".to_string());
+
+    // Rule 2: ETH - Medium Confidence (Wrapped/Derivative)
+    let eth_derivatives = ["WETH", "STETH", "RETH", "CBETH", "WSTETH", "FRXETH", "SWETH"];
+    if eth_derivatives.contains(&symbol_upper.as_str()) ||
+       name_lower.contains("wrapped eth") ||
+       name_lower.contains("staked eth") ||
+       name_lower.contains("liquid staked eth") {
+        return (ExposureCategory::ETH, ConfidenceLevel::Medium, "ETH derivative or wrapper".to_string());
     }
 
-    // BTC exposure
-    if symbol_upper == "BTC" || cg_id == "bitcoin" {
+    // Rule 3: BTC - High Confidence
+    if symbol_upper == "BTC" || cg_id == "bitcoin" || name_lower == "bitcoin" {
         return (ExposureCategory::BTC, ConfidenceLevel::High, "Direct BTC holding".to_string());
     }
-    if symbol_upper == "WBTC" || cg_id == "wrapped-bitcoin" {
-        return (ExposureCategory::BTC, ConfidenceLevel::Medium, "Wrapped BTC (custodial backing)".to_string());
+
+    // Rule 4: BTC - Medium Confidence (Wrapped)
+    let btc_wrappers = ["WBTC", "TBTC", "CBBTC", "RENBTC", "HBTC"];
+    if btc_wrappers.contains(&symbol_upper.as_str()) ||
+       name_lower.contains("wrapped bitcoin") {
+        return (ExposureCategory::BTC, ConfidenceLevel::Medium, "BTC wrapper".to_string());
     }
 
-    // Stablecoins
-    let stablecoins = ["USDC", "USDT", "DAI", "FRAX", "TUSD", "BUSD", "LUSD", "GUSD", "USDP", "PYUSD"];
-    if stablecoins.contains(&symbol_upper.as_str()) {
-        return (ExposureCategory::Stablecoins, ConfidenceLevel::High, format!("{} stablecoin", symbol_upper));
+    // Rule 5: Stablecoins - High Confidence
+    let major_stables = ["USDC", "USDT", "DAI", "BUSD", "TUSD"];
+    if major_stables.contains(&symbol_upper.as_str()) {
+        return (ExposureCategory::Stablecoins, ConfidenceLevel::High, "Major stablecoin".to_string());
     }
 
-    // Default: Other
+    // Rule 6: Stablecoins - Medium Confidence
+    let other_stables = ["FRAX", "LUSD", "GUSD", "USDP", "PYUSD", "SUSD", "MIM", "CRVUSD", "GHO"];
+    if other_stables.contains(&symbol_upper.as_str()) ||
+       (name_lower.contains("usd") && name_lower.contains("stable")) {
+        return (ExposureCategory::Stablecoins, ConfidenceLevel::Medium, "Non-major stablecoin".to_string());
+    }
+
+    // Rule 7: Alt L1s - High Confidence
+    let alt_l1s_high = [
+        ("SOL", "solana", "Solana"),
+        ("AVAX", "avalanche-2", "Avalanche"),
+        ("MATIC", "matic-network", "Polygon"),
+        ("DOT", "polkadot", "Polkadot"),
+        ("ATOM", "cosmos", "Cosmos"),
+        ("NEAR", "near", "NEAR Protocol"),
+        ("ADA", "cardano", "Cardano"),
+        ("FTM", "fantom", "Fantom"),
+        ("ALGO", "algorand", "Algorand"),
+        ("XLM", "stellar", "Stellar"),
+        ("ICP", "internet-computer", "Internet Computer"),
+        ("APT", "aptos", "Aptos"),
+        ("SUI", "sui", "Sui"),
+        ("SEI", "sei-network", "Sei"),
+        ("INJ", "injective-protocol", "Injective"),
+    ];
+    for (sym, cgid, name) in alt_l1s_high.iter() {
+        if symbol_upper == *sym || cg_id == *cgid {
+            return (ExposureCategory::AltL1s, ConfidenceLevel::High, format!("{} L1 token", name));
+        }
+    }
+
+    // Rule 8: Protocol Tokens - High Confidence
+    let protocol_tokens = [
+        ("UNI", "uniswap", "Uniswap"),
+        ("AAVE", "aave", "Aave"),
+        ("MKR", "maker", "Maker"),
+        ("CRV", "curve-dao-token", "Curve"),
+        ("COMP", "compound-governance-token", "Compound"),
+        ("SNX", "havven", "Synthetix"),
+        ("LDO", "lido-dao", "Lido"),
+        ("RPL", "rocket-pool", "Rocket Pool"),
+        ("GMX", "gmx", "GMX"),
+        ("DYDX", "dydx", "dYdX"),
+        ("LINK", "chainlink", "Chainlink"),
+        ("GRT", "the-graph", "The Graph"),
+        ("ENS", "ethereum-name-service", "ENS"),
+        ("OP", "optimism", "Optimism"),
+        ("ARB", "arbitrum", "Arbitrum"),
+        ("PENDLE", "pendle", "Pendle"),
+        ("ENA", "ethena", "Ethena"),
+        ("EIGEN", "eigenlayer", "EigenLayer"),
+    ];
+    for (sym, cgid, name) in protocol_tokens.iter() {
+        if symbol_upper == *sym || cg_id == *cgid {
+            return (ExposureCategory::ProtocolTokens, ConfidenceLevel::High, format!("{} protocol token", name));
+        }
+    }
+
+    // Rule 9: Other - Low Confidence
     (ExposureCategory::Other, ConfidenceLevel::Low, "Unclassified asset".to_string())
+}
+
+fn get_chain_type(chain: &str) -> &'static str {
+    let chain_lower = chain.to_lowercase();
+    match chain_lower.as_str() {
+        "ethereum" | "bitcoin" | "solana" | "avalanche" | "bnb chain" => "L1",
+        "arbitrum" | "optimism" | "base" | "polygon" | "zksync" | "linea" | "scroll" => "L2",
+        _ => "L1"  // Default to L1 for unknown chains
+    }
 }
 
 fn is_stablecoin(symbol: &str) -> bool {
@@ -752,94 +960,133 @@ struct CoinGeckoPrice {
     usd_market_cap: Option<f64>,
 }
 
-fn search_coingecko_tokens(query: &str) -> Vec<TokenSearchResult> {
+/// Search for tokens on CoinGecko by query string.
+///
+/// Uses the CoinGecko search API with the configured demo API key.
+/// Returns up to 10 matching tokens with their id, symbol, and name.
+///
+/// Note: Timeout is in milliseconds (30000 = 30 seconds).
+fn search_coingecko_tokens(query: &str, api_key: &str) -> Vec<TokenSearchResult> {
     let url = format!(
         "https://api.coingecko.com/api/v3/search?query={}&x_cg_demo_api_key={}",
-        url_encode(query), COINGECKO_API_KEY
+        url_encode(query), api_key
     );
 
     match url::Url::parse(&url) {
         Ok(parsed_url) => {
+            // Note: timeout is in milliseconds, not seconds
             match http::client::send_request_await_response(
                 Method::GET,
                 parsed_url,
                 None,
-                30,
+                30000,  // 30 seconds in milliseconds
                 vec![],
             ) {
                 Ok(response) => {
-                    if response.status().is_success() {
-                        let search_response: CoinGeckoSearchResponse =
-                            serde_json::from_slice(response.body()).unwrap_or(CoinGeckoSearchResponse { coins: vec![] });
-                        search_response.coins.into_iter()
-                            .take(10)
-                            .map(|c| TokenSearchResult {
-                                id: c.id,
-                                symbol: c.symbol,
-                                name: c.name,
-                            })
-                            .collect()
+                    let status = response.status();
+                    let body = response.body();
+
+                    if status.is_success() {
+                        match serde_json::from_slice::<CoinGeckoSearchResponse>(body) {
+                            Ok(search_response) => {
+                                search_response.coins.into_iter()
+                                    .take(10)
+                                    .map(|c| TokenSearchResult {
+                                        id: c.id,
+                                        symbol: c.symbol,
+                                        name: c.name,
+                                    })
+                                    .collect()
+                            }
+                            Err(e) => {
+                                println!("smart-portfolio: CoinGecko search parse error: {:?}", e);
+                                vec![]
+                            }
+                        }
                     } else {
-                        println!("CoinGecko search error: {}", response.status());
+                        println!("smart-portfolio: CoinGecko search failed with status: {:?}", status);
                         vec![]
                     }
                 }
                 Err(e) => {
-                    println!("HTTP request error: {:?}", e);
+                    println!("smart-portfolio: CoinGecko search request failed: {:?}", e);
                     vec![]
                 }
             }
         }
         Err(e) => {
-            println!("URL parse error: {:?}", e);
+            println!("smart-portfolio: CoinGecko search URL parse error: {:?}", e);
             vec![]
         }
     }
 }
 
-fn fetch_top_tokens_from_coingecko() -> Vec<TopToken> {
+/// Fetch the top 25 tokens by market cap from CoinGecko.
+///
+/// Uses the CoinGecko markets API with the configured demo API key.
+/// Returns tokens with current price, 24h change, and market cap rank.
+///
+/// Note: Timeout is in milliseconds (30000 = 30 seconds).
+fn fetch_top_tokens_from_coingecko(api_key: &str) -> Vec<TopToken> {
     let url = format!(
         "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=25&page=1&sparkline=false&x_cg_demo_api_key={}",
-        COINGECKO_API_KEY
+        api_key
     );
 
     match url::Url::parse(&url) {
         Ok(parsed_url) => {
+            // Note: timeout is in milliseconds, not seconds
             match http::client::send_request_await_response(
                 Method::GET,
                 parsed_url,
                 None,
-                30,
+                30000,  // 30 seconds in milliseconds
                 vec![],
             ) {
                 Ok(response) => {
-                    if response.status().is_success() {
-                        let coins: Vec<CoinGeckoMarketCoin> =
-                            serde_json::from_slice(response.body()).unwrap_or_default();
-                        coins.into_iter()
-                            .filter_map(|c| {
-                                Some(TopToken {
-                                    id: c.id,
-                                    symbol: c.symbol.to_uppercase(),
-                                    name: c.name,
-                                    current_price: c.current_price?,
-                                    price_change_percentage_24h: c.price_change_percentage_24h.unwrap_or(0.0),
-                                    market_cap_rank: c.market_cap_rank.unwrap_or(0),
-                                })
-                            })
-                            .collect()
+                    let status = response.status();
+                    let body = response.body();
+
+                    if status.is_success() {
+                        match serde_json::from_slice::<Vec<CoinGeckoMarketCoin>>(body) {
+                            Ok(coins) => {
+                                coins.into_iter()
+                                    .filter_map(|c| {
+                                        Some(TopToken {
+                                            id: c.id,
+                                            symbol: c.symbol.to_uppercase(),
+                                            name: c.name,
+                                            current_price: c.current_price?,
+                                            price_change_percentage_24h: c.price_change_percentage_24h.unwrap_or(0.0),
+                                            market_cap_rank: c.market_cap_rank.unwrap_or(0),
+                                        })
+                                    })
+                                    .collect()
+                            }
+                            Err(e) => {
+                                println!("smart-portfolio: top tokens parse error: {:?}", e);
+                                vec![]
+                            }
+                        }
                     } else {
+                        println!("smart-portfolio: top tokens request failed with status: {:?}", status);
                         vec![]
                     }
                 }
-                Err(_) => vec![],
+                Err(e) => {
+                    println!("smart-portfolio: top tokens request failed: {:?}", e);
+                    vec![]
+                }
             }
         }
-        Err(_) => vec![],
+        Err(e) => {
+            println!("smart-portfolio: top tokens URL parse error: {:?}", e);
+            vec![]
+        }
     }
 }
 
-fn fetch_prices_from_coingecko(ids: &[String]) -> HashMap<String, PriceData> {
+fn fetch_prices_from_coingecko(ids: &[String], api_key: &str) -> HashMap<String, PriceData> {
     if ids.is_empty() {
         return HashMap::new();
     }
@@ -847,7 +1094,7 @@ fn fetch_prices_from_coingecko(ids: &[String]) -> HashMap<String, PriceData> {
     let ids_str = ids.join(",");
     let url = format!(
         "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true&x_cg_demo_api_key={}",
-        ids_str, COINGECKO_API_KEY
+        ids_str, api_key
     );
 
     let now = get_current_timestamp();
@@ -858,7 +1105,7 @@ fn fetch_prices_from_coingecko(ids: &[String]) -> HashMap<String, PriceData> {
                 Method::GET,
                 parsed_url,
                 None,
-                30,
+                30000,
                 vec![],
             ) {
                 Ok(response) => {
@@ -936,7 +1183,7 @@ fn fetch_chain_tvl_from_defillama() -> HashMap<String, ChainTvlData> {
                 Method::GET,
                 parsed_url,
                 None,
-                30,
+                30000,
                 vec![],
             ) {
                 Ok(response) => {
@@ -992,7 +1239,7 @@ fn fetch_prices_from_defillama(coins: &[(String, String)]) -> HashMap<String, Pr
                 Method::GET,
                 parsed_url,
                 None,
-                30,
+                30000,
                 vec![],
             ) {
                 Ok(response) => {
@@ -1029,6 +1276,530 @@ fn fetch_prices_from_defillama(coins: &[(String, String)]) -> HashMap<String, Pr
             println!("DeFi Llama URL parse error: {:?}", e);
             HashMap::new()
         }
+    }
+}
+
+// ============================================================================
+// Historical Price Fetching (DeFi Llama)
+// ============================================================================
+
+/// Fetch historical price for multiple tokens at a specific timestamp
+fn fetch_historical_prices_at_timestamp(coins: &[String], timestamp: u64) -> HashMap<String, f64> {
+    if coins.is_empty() {
+        return HashMap::new();
+    }
+
+    // Format coins for DeFi Llama: coingecko:bitcoin,coingecko:ethereum
+    let coin_ids: String = coins.iter()
+        .map(|c| format!("coingecko:{}", c))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let url = format!("{}/prices/historical/{}/{}", DEFILLAMA_COINS_API, timestamp, coin_ids);
+
+    match url::Url::parse(&url) {
+        Ok(parsed_url) => {
+            match http::client::send_request_await_response(
+                Method::GET,
+                parsed_url,
+                None,
+                30000,
+                vec![],
+            ) {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        let price_response: DefiLlamaPriceResponse =
+                            serde_json::from_slice(response.body()).unwrap_or(DefiLlamaPriceResponse { coins: HashMap::new() });
+                        price_response.coins.into_iter()
+                            .filter_map(|(key, p)| {
+                                p.price.map(|price| {
+                                    // Extract symbol from key (e.g., "coingecko:bitcoin" -> "bitcoin")
+                                    let symbol = key.split(':').last().unwrap_or(&key).to_string();
+                                    (symbol, price)
+                                })
+                            })
+                            .collect()
+                    } else {
+                        HashMap::new()
+                    }
+                }
+                Err(_) => HashMap::new(),
+            }
+        }
+        Err(_) => HashMap::new(),
+    }
+}
+
+/// Fetch 30 days of historical prices for multiple tokens
+fn fetch_historical_prices_range(coins: &[String], days: u32) -> HashMap<String, Vec<PricePoint>> {
+    let now = get_current_timestamp();
+    let mut results: HashMap<String, Vec<PricePoint>> = HashMap::new();
+
+    // Fetch daily prices for the range
+    for day in 0..days {
+        let timestamp = now - (day as u64 * 86400);
+        let prices = fetch_historical_prices_at_timestamp(coins, timestamp);
+
+        for (coin, price) in prices {
+            results.entry(coin).or_default().push(PricePoint { timestamp, price });
+        }
+    }
+
+    // Sort each asset's prices by timestamp (oldest to newest)
+    for prices in results.values_mut() {
+        prices.sort_by_key(|p| p.timestamp);
+    }
+
+    results
+}
+
+// ============================================================================
+// Risk Metrics Calculation Functions
+// ============================================================================
+
+/// Calculate daily returns from price points
+fn calculate_returns(prices: &[PricePoint]) -> Vec<f64> {
+    prices.windows(2)
+        .map(|w| (w[1].price - w[0].price) / w[0].price)
+        .collect()
+}
+
+/// Calculate Pearson correlation coefficient between two return series
+fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len().min(y.len());
+    if n < 2 {
+        return 0.0;
+    }
+
+    let mean_x: f64 = x.iter().take(n).sum::<f64>() / n as f64;
+    let mean_y: f64 = y.iter().take(n).sum::<f64>() / n as f64;
+
+    let (mut numerator, mut denom_x, mut denom_y) = (0.0, 0.0, 0.0);
+    for i in 0..n {
+        let dx = x[i] - mean_x;
+        let dy = y[i] - mean_y;
+        numerator += dx * dy;
+        denom_x += dx * dx;
+        denom_y += dy * dy;
+    }
+
+    let denominator = (denom_x * denom_y).sqrt();
+    if denominator == 0.0 { 0.0 } else { numerator / denominator }
+}
+
+/// Calculate annualized volatility from returns
+fn calculate_volatility(returns: &[f64]) -> f64 {
+    if returns.is_empty() {
+        return 0.0;
+    }
+    let n = returns.len() as f64;
+    let mean: f64 = returns.iter().sum::<f64>() / n;
+    let variance: f64 = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n;
+    variance.sqrt() * (365.0_f64).sqrt() // Annualized
+}
+
+/// Get volatility rank based on annualized volatility
+fn get_volatility_rank(volatility: f64) -> String {
+    if volatility < 0.3 {
+        "low".to_string()
+    } else if volatility < 0.6 {
+        "medium".to_string()
+    } else if volatility < 1.0 {
+        "high".to_string()
+    } else {
+        "extreme".to_string()
+    }
+}
+
+/// Calculate current and max drawdown from price points
+fn calculate_drawdown_metrics(prices: &[PricePoint]) -> (f64, f64, f64, f64) {
+    if prices.is_empty() {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+
+    let mut peak = prices[0].price;
+    let mut max_drawdown = 0.0;
+    let mut trough_price = prices[0].price;
+    let peak_price = prices.iter().map(|p| p.price).fold(0.0_f64, f64::max);
+
+    for p in prices {
+        if p.price > peak {
+            peak = p.price;
+        }
+        let drawdown = (peak - p.price) / peak;
+        if drawdown > max_drawdown {
+            max_drawdown = drawdown;
+            trough_price = p.price;
+        }
+    }
+
+    let current_drawdown = (peak_price - prices.last().unwrap().price) / peak_price;
+
+    (current_drawdown * 100.0, max_drawdown * 100.0, peak_price, trough_price)
+}
+
+/// Calculate comprehensive risk metrics for the portfolio
+fn calculate_risk_metrics(positions: &[PositionWithDerived]) -> PortfolioRiskMetrics {
+    let now = get_current_timestamp();
+
+    // Get unique CoinGecko IDs from positions
+    let coins: Vec<String> = positions.iter()
+        .filter_map(|p| p.position.token_identifier.clone())
+        .collect();
+
+    if coins.is_empty() {
+        return PortfolioRiskMetrics {
+            correlation_matrix: CorrelationMatrix { assets: vec![], matrix: vec![] },
+            volatility_scores: vec![],
+            drawdowns: vec![],
+            portfolio_volatility: 0.0,
+            risk_score: 50,
+            generated_at: now,
+        };
+    }
+
+    // Fetch 30 days of historical prices
+    let historical = fetch_historical_prices_range(&coins, 30);
+    let assets: Vec<String> = historical.keys().cloned().collect();
+    let n = assets.len();
+
+    // Calculate correlation matrix
+    let mut matrix = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            if i == j {
+                matrix[i][j] = 1.0;
+            } else if let (Some(prices_i), Some(prices_j)) =
+                (historical.get(&assets[i]), historical.get(&assets[j])) {
+                let returns_i = calculate_returns(prices_i);
+                let returns_j = calculate_returns(prices_j);
+                matrix[i][j] = pearson_correlation(&returns_i, &returns_j);
+            }
+        }
+    }
+
+    // Calculate volatility scores and drawdowns
+    let mut volatility_scores = vec![];
+    let mut drawdowns = vec![];
+
+    for (asset, prices) in &historical {
+        let returns = calculate_returns(prices);
+        let vol_30d = calculate_volatility(&returns);
+        let vol_7d = if returns.len() >= 7 {
+            calculate_volatility(&returns[returns.len().saturating_sub(7)..])
+        } else {
+            vol_30d
+        };
+
+        // Find symbol from positions
+        let symbol = positions.iter()
+            .find(|p| p.position.token_identifier.as_deref() == Some(asset))
+            .map(|p| p.position.token_symbol.clone())
+            .unwrap_or_default();
+
+        volatility_scores.push(VolatilityScore {
+            asset: asset.clone(),
+            symbol: symbol.clone(),
+            volatility_7d: vol_7d * 100.0,
+            volatility_30d: vol_30d * 100.0,
+            volatility_rank: get_volatility_rank(vol_30d),
+        });
+
+        let (current_dd, max_dd, peak, trough) = calculate_drawdown_metrics(prices);
+        drawdowns.push(DrawdownData {
+            asset: asset.clone(),
+            symbol,
+            current_drawdown: current_dd,
+            max_drawdown_30d: max_dd,
+            peak_price: peak,
+            trough_price: trough,
+        });
+    }
+
+    // Calculate overall risk score
+    let avg_volatility: f64 = volatility_scores.iter()
+        .map(|v| v.volatility_30d)
+        .sum::<f64>() / volatility_scores.len().max(1) as f64;
+    let max_drawdown: f64 = drawdowns.iter()
+        .map(|d| d.max_drawdown_30d)
+        .fold(0.0, f64::max);
+    let risk_score = ((avg_volatility * 0.5 + max_drawdown * 0.5) as u8).min(100);
+
+    PortfolioRiskMetrics {
+        correlation_matrix: CorrelationMatrix { assets, matrix },
+        volatility_scores,
+        drawdowns,
+        portfolio_volatility: avg_volatility,
+        risk_score,
+        generated_at: now,
+    }
+}
+
+// ============================================================================
+// Actionable Recommendations Engine
+// ============================================================================
+
+/// Generate actionable recommendations based on portfolio analysis
+fn generate_actionable_recommendations(
+    positions: &[PositionWithDerived],
+    summary: &PortfolioSummary,
+    risk_metrics: &PortfolioRiskMetrics,
+) -> Vec<ActionableRecommendation> {
+    let mut recommendations: Vec<ActionableRecommendation> = Vec::new();
+
+    // 1. CONCENTRATION RISK
+    if summary.largest_position_percent > 50.0 {
+        if let Some(top) = summary.top_positions.first() {
+            let excess = summary.largest_position_percent - 30.0;
+            recommendations.push(ActionableRecommendation {
+                id: "reduce_concentration".to_string(),
+                priority: "critical".to_string(),
+                category: "risk".to_string(),
+                title: format!("Reduce {} Concentration", top.symbol),
+                description: format!(
+                    "{} is {:.1}% of your portfolio - above the recommended 30% maximum for any single asset.",
+                    top.symbol, summary.largest_position_percent
+                ),
+                impact: format!("Reduces single-asset risk by {:.0}%", excess),
+                action: Some(RecommendedAction {
+                    action_type: "rebalance".to_string(),
+                    label: format!("Rebalance {:.0}% to diversify", excess),
+                    from_asset: Some(top.symbol.clone()),
+                    to_asset: None,
+                    percentage: Some(excess),
+                    estimated_value: Some(summary.total_value_usd * (excess / 100.0)),
+                }),
+            });
+        }
+    } else if summary.largest_position_percent > 35.0 {
+        if let Some(top) = summary.top_positions.first() {
+            recommendations.push(ActionableRecommendation {
+                id: "monitor_concentration".to_string(),
+                priority: "medium".to_string(),
+                category: "alert".to_string(),
+                title: format!("Monitor {} Position", top.symbol),
+                description: format!(
+                    "{} at {:.1}% is approaching concentration threshold. Consider rebalancing soon.",
+                    top.symbol, summary.largest_position_percent
+                ),
+                impact: "Awareness of concentration risk".to_string(),
+                action: None,
+            });
+        }
+    }
+
+    // 2. HIGH VOLATILITY POSITIONS
+    for vol in &risk_metrics.volatility_scores {
+        if vol.volatility_rank == "extreme" {
+            if let Some(pos) = positions.iter().find(|p|
+                p.position.token_identifier.as_deref() == Some(&vol.asset)
+            ) {
+                if pos.allocation_percent > 10.0 {
+                    recommendations.push(ActionableRecommendation {
+                        id: format!("high_vol_{}", vol.asset),
+                        priority: "high".to_string(),
+                        category: "risk".to_string(),
+                        title: format!("{} Extreme Volatility", vol.symbol),
+                        description: format!(
+                            "{} has {:.0}% annualized volatility with {:.1}% allocation. Consider reducing exposure.",
+                            vol.symbol, vol.volatility_30d, pos.allocation_percent
+                        ),
+                        impact: "Reduces portfolio volatility".to_string(),
+                        action: Some(RecommendedAction {
+                            action_type: "sell".to_string(),
+                            label: "Reduce by 50%".to_string(),
+                            from_asset: Some(vol.symbol.clone()),
+                            to_asset: Some("USDC".to_string()),
+                            percentage: Some(50.0),
+                            estimated_value: Some(pos.position_value_usd * 0.5),
+                        }),
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. HIGH CORRELATION WARNING
+    let m = &risk_metrics.correlation_matrix;
+    for i in 0..m.assets.len() {
+        for j in (i + 1)..m.assets.len() {
+            if m.matrix[i][j] > 0.85 {
+                // Find symbols for display
+                let sym_i = positions.iter()
+                    .find(|p| p.position.token_identifier.as_deref() == Some(&m.assets[i]))
+                    .map(|p| p.position.token_symbol.clone())
+                    .unwrap_or_else(|| m.assets[i].clone());
+                let sym_j = positions.iter()
+                    .find(|p| p.position.token_identifier.as_deref() == Some(&m.assets[j]))
+                    .map(|p| p.position.token_symbol.clone())
+                    .unwrap_or_else(|| m.assets[j].clone());
+
+                recommendations.push(ActionableRecommendation {
+                    id: format!("correlation_{}_{}", i, j),
+                    priority: "medium".to_string(),
+                    category: "rebalance".to_string(),
+                    title: "High Correlation Detected".to_string(),
+                    description: format!(
+                        "{} and {} have {:.0}% correlation. Holding both provides limited diversification benefit.",
+                        sym_i, sym_j, m.matrix[i][j] * 100.0
+                    ),
+                    impact: "Improve true diversification".to_string(),
+                    action: None,
+                });
+            }
+        }
+    }
+
+    // 4. DRAWDOWN RECOVERY OPPORTUNITIES
+    for dd in &risk_metrics.drawdowns {
+        if dd.current_drawdown > 25.0 {
+            recommendations.push(ActionableRecommendation {
+                id: format!("drawdown_{}", dd.asset),
+                priority: "low".to_string(),
+                category: "opportunity".to_string(),
+                title: format!("{} Recovery Opportunity", dd.symbol),
+                description: format!(
+                    "{} is {:.0}% below its 30-day high. If fundamentals are intact, consider DCA.",
+                    dd.symbol, dd.current_drawdown
+                ),
+                impact: "May improve cost basis".to_string(),
+                action: Some(RecommendedAction {
+                    action_type: "buy".to_string(),
+                    label: "Consider DCA".to_string(),
+                    from_asset: Some("USDC".to_string()),
+                    to_asset: Some(dd.symbol.clone()),
+                    percentage: None,
+                    estimated_value: None,
+                }),
+            });
+        }
+    }
+
+    // 5. NO STABLECOINS WARNING
+    let has_stables = positions.iter().any(|p| {
+        let sym = p.position.token_symbol.to_uppercase();
+        ["USDC", "USDT", "DAI", "FRAX", "LUSD"].contains(&sym.as_str())
+    });
+    if !has_stables && summary.total_value_usd > 1000.0 {
+        recommendations.push(ActionableRecommendation {
+            id: "no_stables".to_string(),
+            priority: "low".to_string(),
+            category: "rebalance".to_string(),
+            title: "No Stablecoin Reserve".to_string(),
+            description: "Consider holding 5-10% in stablecoins for buying opportunities during market dips.".to_string(),
+            impact: "Enables opportunistic buying".to_string(),
+            action: None,
+        });
+    }
+
+    // Sort by priority
+    recommendations.sort_by(|a, b| {
+        let priority_order = |p: &str| match p {
+            "critical" => 0,
+            "high" => 1,
+            "medium" => 2,
+            "low" => 3,
+            _ => 4,
+        };
+        priority_order(&a.priority).cmp(&priority_order(&b.priority))
+    });
+
+    recommendations
+}
+
+// ============================================================================
+// Stress Testing Scenarios
+// ============================================================================
+
+/// Calculate portfolio impact under various market scenarios
+fn calculate_scenarios(positions: &[PositionWithDerived]) -> ScenariosResponse {
+    let total_value: f64 = positions.iter().map(|p| p.position_value_usd).sum();
+
+    // Define predefined scenarios
+    let scenario_definitions = vec![
+        (
+            "crypto_winter",
+            "Crypto Winter",
+            "Major market crash scenario",
+            vec![
+                ("ETH", -70.0), ("BTC", -60.0), ("Alt L1s", -80.0),
+                ("Protocol Tokens", -85.0), ("Stablecoins", 0.0), ("Other", -75.0)
+            ]
+        ),
+        (
+            "eth_rally",
+            "ETH Rally",
+            "ETH outperforms BTC",
+            vec![
+                ("ETH", 50.0), ("BTC", -10.0), ("Protocol Tokens", 30.0),
+                ("Alt L1s", 0.0), ("Stablecoins", 0.0), ("Other", 10.0)
+            ]
+        ),
+        (
+            "stablecoin_depeg",
+            "Stablecoin Risk",
+            "Major stablecoin depegs",
+            vec![
+                ("BTC", 5.0), ("ETH", 5.0), ("Stablecoins", -15.0),
+                ("Alt L1s", -5.0), ("Protocol Tokens", -10.0), ("Other", -10.0)
+            ]
+        ),
+        (
+            "bull_run",
+            "Bull Market",
+            "Major crypto rally",
+            vec![
+                ("BTC", 100.0), ("ETH", 150.0), ("Alt L1s", 200.0),
+                ("Protocol Tokens", 180.0), ("Stablecoins", 0.0), ("Other", 120.0)
+            ]
+        ),
+    ];
+
+    let scenarios: Vec<Scenario> = scenario_definitions.iter().map(|(id, name, desc, changes)| {
+        let mut affected_assets = Vec::new();
+        let mut new_total = 0.0;
+
+        for pos in positions {
+            let (category, _, _) = get_exposure_category(
+                &pos.position.token_symbol,
+                pos.position.token_identifier.as_deref(),
+                &pos.position.token_name
+            );
+
+            let change = changes.iter()
+                .find(|(cat, _)| *cat == category.as_str())
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
+
+            let scenario_value = pos.position_value_usd * (1.0 + change / 100.0);
+            new_total += scenario_value;
+
+            affected_assets.push(AssetImpact {
+                symbol: pos.position.token_symbol.clone(),
+                current_value: pos.position_value_usd,
+                scenario_value,
+                percent_change: change,
+            });
+        }
+
+        let portfolio_impact = if total_value > 0.0 {
+            ((new_total - total_value) / total_value) * 100.0
+        } else {
+            0.0
+        };
+
+        Scenario {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: desc.to_string(),
+            portfolio_impact,
+            affected_assets,
+        }
+    }).collect();
+
+    ScenariosResponse {
+        scenarios,
+        current_value: total_value,
     }
 }
 
@@ -1095,7 +1866,7 @@ fn search_dexscreener(query: &str) -> Vec<DexPairData> {
                 Method::GET,
                 parsed_url,
                 None,
-                30,
+                30000,
                 vec![],
             ) {
                 Ok(response) => {
@@ -1148,7 +1919,7 @@ fn fetch_token_from_dexscreener(token_address: &str) -> Option<PriceData> {
                 Method::GET,
                 parsed_url,
                 None,
-                30,
+                30000,
                 vec![],
             ) {
                 Ok(response) => {
@@ -1231,10 +2002,31 @@ fn get_position_price(position: &Position, state: &AppState) -> f64 {
     position.entry_price_usd.to_f64().unwrap_or(0.0)
 }
 
-fn calculate_positions_with_derived(state: &AppState) -> Vec<PositionWithDerived> {
-    let now = get_current_timestamp();
-    let stale_threshold = 5 * 60; // 5 minutes
+/// Look up 24h price change using the same resolution order as get_position_price()
+fn get_position_price_change_24h(position: &Position, state: &AppState) -> Option<f64> {
+    // Try canonical ID first (preferred for new positions)
+    if let Some(ref canonical) = position.canonical_id {
+        if let Some(price_data) = state.prices.get(&canonical.canonical) {
+            return price_data.price_change_24h;
+        }
+        if let Some(ref cg_id) = canonical.coingecko_id {
+            if let Some(price_data) = state.prices.get(cg_id) {
+                return price_data.price_change_24h;
+            }
+        }
+    }
 
+    // Legacy fallback: check old token_identifier field
+    if let Some(ref cg_id) = position.token_identifier {
+        if let Some(price_data) = state.prices.get(cg_id) {
+            return price_data.price_change_24h;
+        }
+    }
+
+    None
+}
+
+fn calculate_positions_with_derived(state: &AppState) -> Vec<PositionWithDerived> {
     // First pass: calculate total value
     let total_value: f64 = state.positions.values()
         .map(|p| {
@@ -1262,9 +2054,7 @@ fn calculate_positions_with_derived(state: &AppState) -> Vec<PositionWithDerived
             0.0
         };
 
-        let price_change_24h = position.token_identifier.as_ref()
-            .and_then(|cg_id| state.prices.get(cg_id))
-            .and_then(|p| p.price_change_24h);
+        let price_change_24h = get_position_price_change_24h(position, state);
 
         PositionWithDerived {
             position: position.clone(),
@@ -1315,6 +2105,7 @@ fn calculate_portfolio_summary(positions: &[PositionWithDerived], state: &AppSta
     }
     let chain_summary: Vec<ChainExposure> = chain_values.into_iter()
         .map(|(chain, value)| ChainExposure {
+            chain_type: get_chain_type(&chain).to_string(),
             chain,
             value_usd: value,
             percentage: if total_value > 0.0 { (value / total_value) * 100.0 } else { 0.0 },
@@ -1915,43 +2706,70 @@ fn generate_insights(
 fn calculate_exposure(positions: &[PositionWithDerived]) -> ExposureResponse {
     let total_value: f64 = positions.iter().map(|p| p.position_value_usd).sum();
 
-    // Underlying exposure by category
-    let mut category_values: HashMap<ExposureCategory, (f64, ConfidenceLevel, Vec<String>)> = HashMap::new();
+    // Track values by category and confidence level
+    let mut category_data: HashMap<ExposureCategory, HashMap<ConfidenceLevel, (f64, Vec<String>)>> = HashMap::new();
 
     for p in positions {
         let (category, confidence, note) = get_exposure_category(
             &p.position.token_symbol,
-            p.position.token_identifier.as_deref()
+            p.position.token_identifier.as_deref(),
+            &p.position.token_name
         );
 
-        let entry = category_values.entry(category.clone()).or_insert((0.0, confidence.clone(), vec![]));
-        entry.0 += p.position_value_usd;
-        // Use lowest confidence if mixed
-        if confidence == ConfidenceLevel::Low || (confidence == ConfidenceLevel::Medium && entry.1 == ConfidenceLevel::High) {
-            entry.1 = confidence;
-        }
-        if !note.is_empty() && !entry.2.contains(&note) {
-            entry.2.push(note);
+        let cat_entry = category_data.entry(category).or_insert_with(HashMap::new);
+        let conf_entry = cat_entry.entry(confidence).or_insert((0.0, vec![]));
+        conf_entry.0 += p.position_value_usd;
+        if !note.is_empty() && !conf_entry.1.contains(&note) {
+            conf_entry.1.push(note);
         }
     }
 
-    let underlying_exposure: Vec<ExposureEntry> = category_values.into_iter()
-        .map(|(category, (value, confidence, notes))| ExposureEntry {
-            category: category.as_str().to_string(),
-            value_usd: value,
-            percentage: if total_value > 0.0 { (value / total_value) * 100.0 } else { 0.0 },
-            confidence,
-            notes: notes.join("; "),
+    // Build exposure entries with confidence breakdown
+    let underlying_exposure: Vec<ExposureEntry> = category_data.into_iter()
+        .map(|(category, confidence_map)| {
+            let total_cat_value: f64 = confidence_map.values().map(|(v, _)| v).sum();
+            let all_notes: Vec<String> = confidence_map.values()
+                .flat_map(|(_, notes)| notes.clone())
+                .collect();
+
+            // Build confidence breakdown
+            let mut breakdown: Vec<ConfidenceBreakdown> = confidence_map.iter()
+                .map(|(level, (value, _))| ConfidenceBreakdown {
+                    level: level.clone(),
+                    value_usd: *value,
+                    percentage: if total_cat_value > 0.0 { (*value / total_cat_value) * 100.0 } else { 0.0 },
+                })
+                .collect();
+            breakdown.sort_by(|a, b| b.value_usd.partial_cmp(&a.value_usd).unwrap_or(std::cmp::Ordering::Equal));
+
+            // Overall confidence is the lowest present
+            let overall_confidence = if confidence_map.contains_key(&ConfidenceLevel::Low) {
+                ConfidenceLevel::Low
+            } else if confidence_map.contains_key(&ConfidenceLevel::Medium) {
+                ConfidenceLevel::Medium
+            } else {
+                ConfidenceLevel::High
+            };
+
+            ExposureEntry {
+                category: category.as_str().to_string(),
+                value_usd: total_cat_value,
+                percentage: if total_value > 0.0 { (total_cat_value / total_value) * 100.0 } else { 0.0 },
+                confidence: overall_confidence,
+                confidence_breakdown: breakdown,
+                notes: all_notes.join("; "),
+            }
         })
         .collect();
 
-    // Chain exposure
+    // Chain exposure with L1/L2 type
     let mut chain_values: HashMap<String, f64> = HashMap::new();
     for p in positions {
         *chain_values.entry(p.position.chain.clone()).or_insert(0.0) += p.position_value_usd;
     }
     let chain_exposure: Vec<ChainExposure> = chain_values.into_iter()
         .map(|(chain, value)| ChainExposure {
+            chain_type: get_chain_type(&chain).to_string(),
             chain,
             value_usd: value,
             percentage: if total_value > 0.0 { (value / total_value) * 100.0 } else { 0.0 },
@@ -2021,6 +2839,154 @@ fn handle_get_insights(state: &AppState) {
     send_json_response(StatusCode::OK, insights);
 }
 
+// ============================================================================
+// Risk Analysis API Handlers
+// ============================================================================
+
+const RISK_CACHE_TTL_SECS: u64 = 60;
+
+fn get_or_compute_risk_metrics(state: &mut AppState) -> PortfolioRiskMetrics {
+    let now = get_current_timestamp();
+    if let Some(ref cached) = state.cached_risk_metrics {
+        if now.saturating_sub(state.risk_metrics_cached_at) < RISK_CACHE_TTL_SECS {
+            return cached.clone();
+        }
+    }
+    let positions = calculate_positions_with_derived(state);
+    let risk_metrics = calculate_risk_metrics(&positions);
+    state.cached_risk_metrics = Some(risk_metrics.clone());
+    state.risk_metrics_cached_at = now;
+    save_state(state);
+    risk_metrics
+}
+
+fn handle_get_risk_metrics(state: &mut AppState) {
+    let risk_metrics = get_or_compute_risk_metrics(state);
+    send_json_response(StatusCode::OK, risk_metrics);
+}
+
+fn handle_get_recommendations(state: &mut AppState) {
+    let positions = calculate_positions_with_derived(state);
+    let summary = calculate_portfolio_summary(&positions, state);
+    let risk_metrics = get_or_compute_risk_metrics(state);
+    let recommendations = generate_actionable_recommendations(&positions, &summary, &risk_metrics);
+
+    let response = RecommendationsResponse {
+        recommendations,
+        risk_score: risk_metrics.risk_score,
+        generated_at: get_current_timestamp(),
+    };
+    send_json_response(StatusCode::OK, response);
+}
+
+fn handle_get_scenarios(state: &AppState) {
+    let positions = calculate_positions_with_derived(state);
+    let scenarios = calculate_scenarios(&positions);
+    send_json_response(StatusCode::OK, scenarios);
+}
+
+fn fetch_cryptopanic_news(currencies: &str, api_key: &str) -> Vec<NewsItem> {
+    if currencies.is_empty() || api_key.is_empty() {
+        return Vec::new();
+    }
+
+    let encoded_currencies = url_encode(currencies);
+    let url = format!(
+        "https://cryptopanic.com/api/developer/v2/posts/?auth_token={}&currencies={}&kind=news&public=true",
+        url_encode(api_key),
+        encoded_currencies
+    );
+
+    let parsed_url = match url::Url::parse(&url) {
+        Ok(u) => u,
+        Err(e) => {
+            println!("smart-portfolio: invalid CryptoPanic URL: {:?}", e);
+            return Vec::new();
+        }
+    };
+
+    match http::client::send_request_await_response(
+        Method::GET,
+        parsed_url,
+        None,
+        30000,
+        vec![],
+    ) {
+        Ok(response) => {
+            let status = response.status();
+            if status.as_u16() != 200 {
+                println!("smart-portfolio: CryptoPanic API returned {}", status);
+                return Vec::new();
+            }
+            let body = response.body();
+            match serde_json::from_slice::<serde_json::Value>(body) {
+                Ok(json) => {
+                    let mut items = Vec::new();
+                    if let Some(results) = json.get("results").and_then(|r| r.as_array()) {
+                        for result in results.iter().take(5) {
+                            let title = result.get("title")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let url = result.get("url")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let source = result.get("source")
+                                .and_then(|v| v.get("title"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown")
+                                .to_string();
+                            let published_at = result.get("published_at")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let votes = result.get("votes").unwrap_or(&serde_json::Value::Null);
+                            let positive_votes = votes.get("positive")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0) as i32;
+                            let negative_votes = votes.get("negative")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0) as i32;
+
+                            items.push(NewsItem {
+                                title,
+                                url,
+                                source,
+                                published_at,
+                                positive_votes,
+                                negative_votes,
+                            });
+                        }
+                    }
+                    items
+                }
+                Err(e) => {
+                    println!("smart-portfolio: CryptoPanic parse error: {:?}", e);
+                    Vec::new()
+                }
+            }
+        }
+        Err(e) => {
+            println!("smart-portfolio: CryptoPanic fetch error: {:?}", e);
+            Vec::new()
+        }
+    }
+}
+
+const CRYPTOPANIC_FALLBACK_KEY: &str = "eaa4e721ce93028b6b5086ad7456fb0b7f48a970";
+
+fn handle_get_news(state: &AppState, currencies: &str) {
+    let api_key = state.cryptopanic_api_key.clone()
+        .filter(|k| !k.is_empty())
+        .unwrap_or_else(|| CRYPTOPANIC_FALLBACK_KEY.to_string());
+
+    println!("smart-portfolio: fetching news for currencies={}, key_len={}", currencies, api_key.len());
+    let news = fetch_cryptopanic_news(currencies, &api_key);
+    println!("smart-portfolio: fetched {} news items", news.len());
+    send_json_response(StatusCode::OK, serde_json::json!({ "news": news }));
+}
+
 fn handle_add_position(state: &mut AppState, body: &[u8]) {
     let request: AddPositionRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
@@ -2072,7 +3038,8 @@ fn handle_add_position(state: &mut AppState, body: &[u8]) {
     // Fetch price for new position if CoinGecko ID provided
     if let Some(cg_id) = &position.token_identifier {
         if !state.prices.contains_key(cg_id) {
-            let prices = fetch_prices_from_coingecko(&[cg_id.clone()]);
+            let api_key = get_api_key(state);
+            let prices = fetch_prices_from_coingecko(&[cg_id.clone()], &api_key);
             for (id, price_data) in prices {
                 // Store under raw CoinGecko ID (backwards compatibility)
                 state.prices.insert(id.clone(), price_data.clone());
@@ -2147,13 +3114,15 @@ fn handle_delete_position(state: &mut AppState, position_id: &str) {
     }
 }
 
-fn handle_search_tokens(query: &str) {
-    let results = search_coingecko_tokens(query);
+fn handle_search_tokens(state: &AppState, query: &str) {
+    let api_key = get_api_key(state);
+    let results = search_coingecko_tokens(query, &api_key);
     send_json_response(StatusCode::OK, results);
 }
 
-fn handle_get_token_price(token_id: &str) {
-    let prices = fetch_prices_from_coingecko(&[token_id.to_string()]);
+fn handle_get_token_price(state: &AppState, token_id: &str) {
+    let api_key = get_api_key(state);
+    let prices = fetch_prices_from_coingecko(&[token_id.to_string()], &api_key);
     if let Some(price_data) = prices.get(token_id) {
         send_json_response(StatusCode::OK, serde_json::json!({
             "price_usd": price_data.price_usd,
@@ -2164,8 +3133,9 @@ fn handle_get_token_price(token_id: &str) {
     }
 }
 
-fn handle_get_top_tokens() {
-    let tokens = fetch_top_tokens_from_coingecko();
+fn handle_get_top_tokens(state: &AppState) {
+    let api_key = get_api_key(state);
+    let tokens = fetch_top_tokens_from_coingecko(&api_key);
     send_json_response(StatusCode::OK, serde_json::json!({ "tokens": tokens }));
 }
 
@@ -2188,7 +3158,8 @@ fn handle_refresh_prices(state: &mut AppState) {
         .collect();
 
     if !coingecko_ids.is_empty() {
-        let prices = fetch_prices_from_coingecko(&coingecko_ids);
+        let api_key = get_api_key(state);
+        let prices = fetch_prices_from_coingecko(&coingecko_ids, &api_key);
         for (id, price_data) in prices {
             // Store under raw CoinGecko ID (backwards compatibility)
             state.prices.insert(id.clone(), price_data.clone());
@@ -2350,11 +3321,12 @@ fn handle_load_demo(state: &mut AppState) {
     }
 
     // Add demo positions
+    let api_key = get_api_key(state);
     let demo_positions = get_demo_positions();
     for position in demo_positions {
         if let Some(cg_id) = &position.token_identifier {
             if !state.prices.contains_key(cg_id) {
-                let prices = fetch_prices_from_coingecko(&[cg_id.clone()]);
+                let prices = fetch_prices_from_coingecko(&[cg_id.clone()], &api_key);
                 for (id, price_data) in prices {
                     // Store under raw CoinGecko ID (backwards compatibility)
                     state.prices.insert(id.clone(), price_data.clone());
@@ -2367,10 +3339,7 @@ fn handle_load_demo(state: &mut AppState) {
         state.positions.insert(position.id.clone(), position);
     }
 
-    state.last_price_fetch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    state.last_price_fetch = get_current_timestamp();
     save_state(state);
 
     send_json_response(StatusCode::OK, serde_json::json!({
@@ -2404,16 +3373,130 @@ fn handle_clear_demo(state: &mut AppState) {
     }));
 }
 
+/// Debug endpoint to test outbound HTTP connectivity.
+///
+/// Verifies that the Hyperware http-client capability is working correctly.
+/// Requires `http-client:distro:sys` capability in manifest.json.
+///
+/// Usage: GET /api/debug/http
+fn handle_debug_http() {
+    let url = "https://httpbin.org/get";
+
+    match url::Url::parse(url) {
+        Ok(parsed_url) => {
+            // Note: timeout is in milliseconds (30000 = 30 seconds)
+            match http::client::send_request_await_response(
+                Method::GET,
+                parsed_url,
+                None,
+                30000,  // 30 seconds in milliseconds
+                vec![],
+            ) {
+                Ok(response) => {
+                    let status = response.status();
+                    let body_len = response.body().len();
+                    send_json_response(StatusCode::OK, serde_json::json!({
+                        "success": true,
+                        "status": status.as_u16(),
+                        "body_len": body_len,
+                        "message": "Outbound HTTP works!"
+                    }));
+                }
+                Err(e) => {
+                    send_json_response(StatusCode::OK, serde_json::json!({
+                        "success": false,
+                        "error": format!("{:?}", e),
+                        "message": "Outbound HTTP failed - check http-client capability"
+                    }));
+                }
+            }
+        }
+        Err(e) => {
+            send_error_response(StatusCode::BAD_REQUEST, &format!("URL parse error: {:?}", e));
+        }
+    }
+}
+
+// ============================================================================
+// Configuration Handlers
+// ============================================================================
+
+fn handle_set_config(state: &mut AppState, body: &[u8]) {
+    #[derive(Deserialize)]
+    struct ConfigRequest {
+        api_key: Option<String>,
+        cryptopanic_api_key: Option<String>,
+    }
+
+    let request: ConfigRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(_) => return send_error_response(StatusCode::BAD_REQUEST, "Invalid JSON"),
+    };
+
+    if let Some(key) = request.api_key {
+        if key.is_empty() {
+            state.api_key = None;
+        } else {
+            state.api_key = Some(key);
+        }
+    }
+
+    if let Some(key) = request.cryptopanic_api_key {
+        if key.is_empty() {
+            state.cryptopanic_api_key = None;
+        } else {
+            state.cryptopanic_api_key = Some(key);
+        }
+    }
+
+    save_state(state);
+    send_json_response(StatusCode::OK, serde_json::json!({ "success": true }));
+}
+
+fn handle_get_config(state: &AppState) {
+    let masked_key = state.api_key.as_ref().map(|k| {
+        if k.len() > 8 {
+            format!("{}...{}", &k[..4], &k[k.len()-4..])
+        } else {
+            "****".to_string()
+        }
+    });
+
+    let masked_cryptopanic_key = state.cryptopanic_api_key.as_ref().map(|k| {
+        if k.len() > 8 {
+            format!("{}...{}", &k[..4], &k[k.len()-4..])
+        } else {
+            "****".to_string()
+        }
+    });
+
+    send_json_response(StatusCode::OK, serde_json::json!({
+        "api_key_configured": state.api_key.is_some(),
+        "api_key_masked": masked_key,
+        "cryptopanic_api_key_configured": state.cryptopanic_api_key.is_some(),
+        "cryptopanic_api_key_masked": masked_cryptopanic_key,
+    }));
+}
+
 // ============================================================================
 // HTTP Request Router
 // ============================================================================
 
+/// Main HTTP request handler that routes requests to appropriate handlers.
+///
+/// Important: Uses Hyperware's `req.query_params()` for accessing query parameters
+/// instead of manually parsing the query string. This ensures proper URL decoding
+/// and consistent parameter handling.
 fn handle_http_request(state: &mut AppState, req: &IncomingHttpRequest, body: &[u8]) {
     let raw_path = req.path().unwrap_or_else(|_| "/".to_string());
     let method = req.method().unwrap_or(Method::GET);
 
-    // Parse path and query string from raw path
-    let (path, query_string) = match raw_path.split_once('?') {
+    // Use Hyperware's built-in query parameter parsing.
+    // This properly handles URL encoding and provides a HashMap<String, String>.
+    let query_params = req.query_params();
+
+    // Extract path without query string for route matching
+    let (path, _query_string) = match raw_path.split_once('?') {
         Some((p, q)) => (p.to_string(), Some(q.to_string())),
         None => (raw_path, None),
     };
@@ -2433,35 +3516,33 @@ fn handle_http_request(state: &mut AppState, req: &IncomingHttpRequest, body: &[
         // Insights API
         (Method::GET, ["api", "insights"]) => handle_get_insights(state),
 
+        // Risk Analysis APIs
+        (Method::GET, ["api", "risk", "metrics"]) => handle_get_risk_metrics(state),
+        (Method::GET, ["api", "recommendations"]) => handle_get_recommendations(state),
+        (Method::GET, ["api", "scenarios"]) => handle_get_scenarios(state),
+
+        // News API (CryptoPanic)
+        (Method::GET, ["api", "news"]) => {
+            let currencies = query_params.get("currencies").map(|s| s.as_str()).unwrap_or("");
+            handle_get_news(state, currencies);
+        }
+
         // Pricing API
         (Method::POST, ["api", "refresh"]) => handle_refresh_prices(state),
         (Method::GET, ["api", "tokens", "search"]) => {
-            // Parse query from query string
-            let query = query_string
-                .as_ref()
-                .and_then(|qs| {
-                    qs.split('&')
-                        .find(|p| p.starts_with("q="))
-                        .map(|p| p.trim_start_matches("q="))
-                })
-                .unwrap_or("");
-            handle_search_tokens(query);
+            // Use Hyperware's parsed query params
+            let query = query_params.get("q").map(|s| s.as_str()).unwrap_or("");
+            handle_search_tokens(state, query);
         }
-        (Method::GET, ["api", "tokens", "price", token_id]) => handle_get_token_price(token_id),
-        (Method::GET, ["api", "tokens", "top"]) => handle_get_top_tokens(),
+        (Method::GET, ["api", "tokens", "price", token_id]) => handle_get_token_price(state, token_id),
+        (Method::GET, ["api", "tokens", "top"]) => handle_get_top_tokens(state),
 
         // Market Data API (DeFi Llama + Dexscreener)
         (Method::GET, ["api", "market"]) => handle_get_market_data(state),
         (Method::POST, ["api", "market", "tvl"]) => handle_refresh_chain_tvl(state),
         (Method::GET, ["api", "dex", "search"]) => {
-            let query = query_string
-                .as_ref()
-                .and_then(|qs| {
-                    qs.split('&')
-                        .find(|p| p.starts_with("q="))
-                        .map(|p| p.trim_start_matches("q="))
-                })
-                .unwrap_or("");
+            // Use Hyperware's parsed query params
+            let query = query_params.get("q").map(|s| s.as_str()).unwrap_or("");
             handle_search_dex(query);
         }
         (Method::GET, ["api", "dex", "token", address]) => handle_fetch_dex_price(state, address),
@@ -2473,6 +3554,13 @@ fn handle_http_request(state: &mut AppState, req: &IncomingHttpRequest, body: &[
         // Demo Portfolio API
         (Method::POST, ["api", "demo", "load"]) => handle_load_demo(state),
         (Method::DELETE, ["api", "demo", "clear"]) => handle_clear_demo(state),
+
+        // Configuration API
+        (Method::POST, ["api", "config"]) => handle_set_config(state, body),
+        (Method::GET, ["api", "config"]) => handle_get_config(state),
+
+        // Debug HTTP endpoint to test outbound requests
+        (Method::GET, ["api", "debug", "http"]) => handle_debug_http(),
 
         // Fallback
         (_, ["api", ..]) => send_error_response(StatusCode::NOT_FOUND, "API endpoint not found"),
@@ -2531,9 +3619,19 @@ fn init(_our: Address) {
         "/api/market/tvl",
         "/api/dex/search",
         "/api/dex/token/:address",
+        // Risk Analysis APIs
+        "/api/risk/metrics",
+        "/api/recommendations",
+        "/api/scenarios",
+        // News API
+        "/api/news",
         // Demo portfolio APIs
         "/api/demo/load",
         "/api/demo/clear",
+        // Configuration API
+        "/api/config",
+        // Debug endpoint
+        "/api/debug/http",
     ];
 
     for path in api_paths {

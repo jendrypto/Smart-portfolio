@@ -1,7 +1,20 @@
+// Canonical ID types
+export type IdentifierKind = 'Coingecko' | 'Address' | 'Symbol';
+
+export interface CanonicalId {
+  canonical: string;
+  kind: IdentifierKind;
+  raw_input: string;
+  coingecko_id: string | null;
+  address: string | null;
+  chain: string | null;
+}
+
 // Position types
 export interface Position {
   id: string;
   token_identifier: string | null;
+  canonical_id: CanonicalId | null;
   token_symbol: string;
   token_name: string;
   chain: string;
@@ -40,6 +53,7 @@ export interface MoverInfo {
 
 export interface ChainExposure {
   chain: string;
+  chain_type: string;  // "L1" or "L2"
   value_usd: number;
   percentage: number;
 }
@@ -73,11 +87,18 @@ export interface HoldingsResponse {
 // Exposure types
 export type ConfidenceLevel = 'High' | 'Medium' | 'Low';
 
+export interface ConfidenceBreakdown {
+  level: ConfidenceLevel;
+  value_usd: number;
+  percentage: number;  // percentage within category
+}
+
 export interface ExposureEntry {
   category: string;
   value_usd: number;
   percentage: number;
   confidence: ConfidenceLevel;
+  confidence_breakdown: ConfidenceBreakdown[];
   notes: string;
 }
 
@@ -201,4 +222,105 @@ export interface TopToken {
   current_price: number;
   price_change_percentage_24h: number;
   market_cap_rank: number;
+}
+
+// ============================================================================
+// Risk Metrics Types
+// ============================================================================
+
+export interface CorrelationMatrix {
+  assets: string[];
+  matrix: number[][];
+}
+
+export interface VolatilityScore {
+  asset: string;
+  symbol: string;
+  volatility_7d: number;
+  volatility_30d: number;
+  volatility_rank: 'low' | 'medium' | 'high' | 'extreme';
+}
+
+export interface DrawdownData {
+  asset: string;
+  symbol: string;
+  current_drawdown: number;
+  max_drawdown_30d: number;
+  peak_price: number;
+  trough_price: number;
+}
+
+export interface PortfolioRiskMetrics {
+  correlation_matrix: CorrelationMatrix;
+  volatility_scores: VolatilityScore[];
+  drawdowns: DrawdownData[];
+  portfolio_volatility: number;
+  risk_score: number;
+  generated_at: number;
+}
+
+// ============================================================================
+// Actionable Recommendations Types
+// ============================================================================
+
+export interface RecommendedAction {
+  action_type: 'swap' | 'sell' | 'buy' | 'rebalance';
+  label: string;
+  from_asset?: string;
+  to_asset?: string;
+  percentage?: number;
+  estimated_value?: number;
+}
+
+export interface ActionableRecommendation {
+  id: string;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  category: 'risk' | 'opportunity' | 'rebalance' | 'alert';
+  title: string;
+  description: string;
+  impact: string;
+  action: RecommendedAction | null;
+}
+
+export interface RecommendationsResponse {
+  recommendations: ActionableRecommendation[];
+  risk_score: number;
+  generated_at: number;
+}
+
+// ============================================================================
+// Scenario (Stress Testing) Types
+// ============================================================================
+
+export interface AssetImpact {
+  symbol: string;
+  current_value: number;
+  scenario_value: number;
+  percent_change: number;
+}
+
+export interface Scenario {
+  id: string;
+  name: string;
+  description: string;
+  portfolio_impact: number;
+  affected_assets: AssetImpact[];
+}
+
+export interface ScenariosResponse {
+  scenarios: Scenario[];
+  current_value: number;
+}
+
+// ============================================================================
+// News Types (CryptoPanic)
+// ============================================================================
+
+export interface NewsItem {
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+  positive_votes: number;
+  negative_votes: number;
 }

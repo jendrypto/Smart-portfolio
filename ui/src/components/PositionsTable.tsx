@@ -48,6 +48,18 @@ function PositionsTable() {
   } = usePortfolioStore();
 
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [activeRowId, setActiveRowId] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+
+  const toggleRowActions = (id: string) => {
+    if (activeRowId === id) {
+      setActiveRowId(null);
+      setConfirmDelete(null);
+    } else {
+      setActiveRowId(id);
+      setConfirmDelete(null);
+    }
+  };
 
   const sortedPositions = useMemo(() => {
     const sorted = [...positions].sort((a, b) => {
@@ -86,9 +98,15 @@ function PositionsTable() {
     if (confirmDelete === id) {
       await deletePosition(id);
       setConfirmDelete(null);
+      setActiveRowId(null);
     } else {
       setConfirmDelete(id);
     }
+  };
+
+  const handleEdit = (id: string) => {
+    setEditingPositionId(id);
+    setActiveRowId(null);
   };
 
   const getSortIcon = (field: SortField) => {
@@ -108,6 +126,18 @@ function PositionsTable() {
           <span className="positions-count">{positions.length}</span>
         </h2>
         <div className="positions-meta">
+          <button
+            className={`btn btn-small ${editMode ? 'btn-edit-active' : 'btn-edit'}`}
+            onClick={() => {
+              if (editMode) {
+                setActiveRowId(null);
+                setConfirmDelete(null);
+              }
+              setEditMode(!editMode);
+            }}
+          >
+            {editMode ? 'Done' : 'Edit'}
+          </button>
           Last price update: <span>{lastUpdate}</span>
         </div>
       </div>
@@ -116,7 +146,7 @@ function PositionsTable() {
         <table className="positions-table">
           <thead>
             <tr>
-              <th style={{ width: '32px' }}></th>
+              {editMode && <th style={{ width: '32px' }}></th>}
               <th>Token</th>
               <th>Chain</th>
               <th className="text-right">Quantity</th>
@@ -127,19 +157,30 @@ function PositionsTable() {
               <th className="text-right sortable" onClick={() => handleSort('pnl')}>
                 P&L {getSortIcon('pnl')}
               </th>
-              <th className="text-center"></th>
+              {editMode && <th className="text-center"></th>}
             </tr>
           </thead>
           <tbody>
             {sortedPositions.map((p) => {
               const icon = getTokenIcon(p.position.token_symbol);
               const pnlIsPositive = p.unrealized_pnl_usd >= 0;
+              const isActive = activeRowId === p.position.id;
 
               return (
-                <tr key={p.position.id}>
-                  <td className="text-center">
-                    <span className="expand-icon">▼</span>
-                  </td>
+                <tr key={p.position.id} className={isActive ? 'row-active' : ''}>
+                  {editMode && (
+                    <td className="text-center">
+                      <button
+                        className={`pencil-btn ${isActive ? 'active' : ''}`}
+                        onClick={() => toggleRowActions(p.position.id)}
+                        title="Edit options"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+                        </svg>
+                      </button>
+                    </td>
+                  )}
                   <td>
                     <div className="token-cell">
                       <div className={`token-icon ${icon.class}`}>{icon.text}</div>
@@ -166,24 +207,28 @@ function PositionsTable() {
                       {formatCurrency(p.unrealized_pnl_usd)}
                     </span>
                   </td>
-                  <td className="text-center">
-                    <div className="actions-cell">
-                      <button
-                        className="btn btn-small btn-edit"
-                        onClick={() => setEditingPositionId(p.position.id)}
-                        disabled={isLoading}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className={`btn btn-small ${confirmDelete === p.position.id ? 'btn-danger-confirm' : 'btn-danger'}`}
-                        onClick={() => handleDelete(p.position.id)}
-                        disabled={isLoading}
-                      >
-                        {confirmDelete === p.position.id ? 'Confirm?' : 'Delete'}
-                      </button>
-                    </div>
-                  </td>
+                  {editMode && (
+                    <td className="text-center">
+                      {isActive && (
+                        <div className="actions-cell">
+                          <button
+                            className="btn btn-small btn-edit"
+                            onClick={() => handleEdit(p.position.id)}
+                            disabled={isLoading}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className={`btn btn-small ${confirmDelete === p.position.id ? 'btn-danger-confirm' : 'btn-danger'}`}
+                            onClick={() => handleDelete(p.position.id)}
+                            disabled={isLoading}
+                          >
+                            {confirmDelete === p.position.id ? 'Confirm?' : 'Delete'}
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  )}
                 </tr>
               );
             })}
