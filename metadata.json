@@ -5,10 +5,10 @@
     "properties": {
         "package_name": "smart-portfolio",
         "current_version": "0.1.0",
-        "publisher": "hyperchad.os",
-        "mirrors": ["hyperchad.os"],
+        "publisher": "hyperchad",
+        "mirrors": ["hyperchad"],
         "code_hashes": {
-            "0.1.0": "cbeba9abbc8bdfd15aa7a1987d272f559b2fceb88472f18cdc20e16f9da223f3"
+            "0.1.0": "237d47547689d5d7d308303909a550eeca793977a3dc3e70c4ea5f66070d39d5"
         },
         "wit_version": 1,
         "dependencies": []
