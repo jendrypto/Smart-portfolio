@@ -1,5 +1,5 @@
 {
-    "name": "Smart Portfolio",
+    "name": "smart-portfolio",
     "description": "A local-first crypto portfolio tracker with Holdings and Exposure views. Track your positions, monitor PnL, and understand your real asset exposure.",
     "image": "",
     "properties": {
