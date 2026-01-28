@@ -4154,7 +4154,7 @@ fn init(_our: Address) {
     println!("smart-portfolio: starting...");
 
     let mut state = load_state();
-    hyperware_process_lib::homepage::add_to_homepage("Smart Portfolio", None, None, None); 
+    hyperware_process_lib::homepage::add_to_homepage("Smart Portfolio", None, Some("/"), None); 
     // Migrate existing positions to canonical IDs (one-time migration)
     migrate_positions_to_canonical(&mut state);
 
