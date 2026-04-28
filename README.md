@@ -1,223 +1,117 @@
 # Smart Portfolio
 
-A local-first cryptocurrency portfolio tracker built as a Hyperware app. Track your holdings, analyze exposure, and get AI-powered insights - all while keeping your data private and under your control.
+**Crypto portfolio risk analytics — correlation matrices, volatility scoring, drawdown analysis, and scenario stress-testing for active investors and crypto-native funds.**
 
-## Features
+![Smart Portfolio dashboard](docs/dashboard.png)
 
-### Holdings Tracking
-- Add and manage crypto positions across multiple chains
-- Track entry prices, quantities, and dates
-- View real-time P&L (Profit/Loss) calculations
-- Automatic price updates from multiple data sources
-- Import positions directly from an EVM wallet address
+> **Status:** Originally built and deployed as a [Hyperware](https://hyperware.ai) app. With Hyperware being decommissioned, the app is being ported to a standalone deployment (React frontend + lightweight API). This repo contains the original Rust backend and the React UI; the migration in progress strips the Hyperware-specific layer while preserving the analytics engine.
 
-### Wallet Import
-- Import token positions by entering an EVM wallet address
-- Scans 7 EVM chains: Ethereum, Arbitrum, Optimism, Base, Polygon, Avalanche, BNB Chain
-- Automatic balance and price detection via Moralis API
-- Selective import: review discovered tokens and choose which to add
-- Dust filtering: small-value tokens (< $1) filtered by default
-- Re-sync button to update wallet positions after initial import
-- Wallet-imported positions marked with "W" badge in the positions table
+## What it does
 
-### Portfolio Analytics
-- **Summary Dashboard**: Total value, unrealized P&L, top positions
-- **Historical Snapshots**: Daily portfolio value tracking with charts
-- **Chain Exposure**: See how your portfolio is distributed across blockchains
-- **Asset Exposure**: Understand your underlying exposure (ETH, BTC, Stablecoins, Other)
+Smart Portfolio is the kind of tool a crypto VC associate or active investor builds in spreadsheets — but actually built. Add positions manually or by scanning an EVM wallet, and the app continuously computes:
 
-### Smart Insights
-AI-powered portfolio analysis that provides actionable insights:
-- Concentration warnings (single position risk)
-- Performance feedback (gains/losses)
-- 24h price movement alerts
-- Chain diversification analysis
-- Liquidity warnings (from DEX data)
-- Portfolio health scoring (0-100)
+- **Live P&L** across positions with prices from CoinGecko, DeFi Llama, and Dexscreener
+- **Concentration & exposure** by chain (Ethereum, Solana, Bitcoin, etc.) and by underlying asset (ETH, BTC, stablecoins, other)
+- **Portfolio risk score** rolled up from per-asset volatility, correlation, and drawdown
+- **Correlation matrix** using Pearson coefficients across the portfolio
+- **Annualized volatility** scored at 7-day and 30-day windows per asset
+- **Drawdown analysis** — current and max over rolling 30-day windows
+- **Scenario stress tests** — crypto winter, bull run, ETH rally, stablecoin depeg
+- **Actionable recommendations** prioritized by impact (rebalance, sell, buy, alert)
+- **Real-time crypto news** per held asset via CryptoPanic
+- **Wallet import** across 7 EVM chains (Ethereum, Arbitrum, Optimism, Base, Polygon, Avalanche, BNB) via Moralis
 
-### Risk Analysis
-- **Portfolio Risk Score**: Aggregate risk assessment (0-100)
-- **Correlation Matrix**: Asset correlation analysis using Pearson coefficients
-- **Volatility Tracking**: 7-day and 30-day annualized volatility scores per asset
-- **Drawdown Analysis**: Current and max drawdown monitoring over 30-day windows
-- **Stress Testing**: Scenario-based portfolio impact simulations (crypto winter, bull run, ETH rally, stablecoin depeg)
+All quant — Pearson correlation, volatility scoring, drawdown windows, scenario impact — runs in Rust on the backend. ~4,200 lines, with a 60-second risk-metrics cache to avoid burning API quota.
 
-### Actionable Recommendations
-- Prioritized actions (critical/high/medium/low)
-- Categories: risk mitigation, opportunities, rebalancing, alerts
-- Specific rebalance/sell/buy suggestions with estimated impact
-
-### Live News Feed
-- **CryptoPanic Integration**: Real-time crypto news per token/category via the CryptoPanic Developer API v2
-- Shows the 5 most recent articles in the Exposure side panel
-- Each headline is clickable, opening the source article in a new tab
-- Displays source, date, and community sentiment votes
-- Works out of the box with a built-in fallback API key
-
-### Multi-Source Data
-Integrated with four data providers:
-- **CoinGecko**: Token prices, market caps, 24h changes
-- **DeFi Llama**: Chain TVL data, protocol information, historical prices
-- **Dexscreener**: DEX prices, liquidity, volume for newer tokens
-- **CryptoPanic**: Real-time crypto news and sentiment (Developer API v2)
-- **Moralis**: EVM wallet token balances and USD prices across 7 chains
-
-### Security & Data Integrity
-- **Input Validation**: Strict bounds checking on all user inputs
-- **CSV Injection Prevention**: Safe exports following RFC 4180
-- **URL Encoding**: All external API queries properly encoded
-- **Canonical Identifiers**: Consistent token identification across data sources
-
-## Quick Start
-
-### Prerequisites
-- [Hyperware Kit](https://github.com/hyperware-ai/kit) installed
-- Rust toolchain with `wasm32-wasip1` target
-- Node.js 18+
-
-### Build & Deploy
-
-```bash
-# Build the package
-kit build
-
-# Start a fake node for testing
-kit boot-fake-node
-
-# Deploy to the fake node
-kit start-package
-```
-
-### Access the App
-Once deployed, access your portfolio at:
-```
-http://localhost:8080/smart-portfolio:smart-portfolio:template.os/
-```
-
-## Project Structure
+## Architecture
 
 ```
 smart-portfolio/
-├── smart-portfolio/        # Rust backend (WASM process)
+├── smart-portfolio/        # Rust backend (~4,200 LOC, compiles to WASM)
+│   └── src/lib.rs          # Risk math, API integrations, state, HTTP routing
+├── ui/                     # React 18 + TypeScript + Zustand + Vite
 │   └── src/
-│       └── lib.rs          # Main application logic
-├── ui/                     # React frontend
-│   └── src/
-│       ├── components/     # UI components
-│       ├── store/          # Zustand state management
-│       └── types/          # TypeScript type definitions
-├── docs/                   # Documentation
-│   ├── API.md              # API reference
-│   ├── ARCHITECTURE.md     # System architecture
-│   ├── SETUP.md            # Setup guide
-│   └── DEVELOPMENT.md      # Development guide
-├── pkg/                    # Built package output
-├── CHANGELOG.md            # Version history and recent changes
-└── metadata.json           # Hyperware package metadata
+│       ├── components/     # 22 components (risk, exposure, recommendations, charts)
+│       ├── store/          # Zustand store
+│       └── types/          # Shared types
+├── docs/                   # API.md, ARCHITECTURE.md, SETUP.md, DEVELOPMENT.md
+└── pkg/                    # Built Hyperware package (legacy)
 ```
+
+**Data sources**
+- CoinGecko — prices, market caps, 24h changes
+- DeFi Llama — chain TVL, historical prices
+- Dexscreener — DEX prices and liquidity for newer tokens
+- CryptoPanic Developer API v2 — real-time news and sentiment
+- Moralis Web3 Data API — multi-chain wallet token balances
+
+**Risk module** (`smart-portfolio/src/lib.rs`)
+- `pearson_correlation` — pairwise asset correlation
+- `calculate_volatility` — annualized stdev of returns
+- `calculate_drawdown_metrics` — current + max drawdown over rolling window
+- `calculate_risk_metrics` — portfolio-level rollup (0–100 score)
+- `calculate_scenarios` — applies named macro scenarios to current weights
+- `generate_actionable_recommendations` — prioritized output with impact estimates
+
+## Migration off Hyperware (in progress)
+
+Hyperware is being decommissioned, so this app is being moved to a standalone stack:
+
+- **Frontend** — React + Vite, deployed to Vercel (no changes to component logic)
+- **Backend** — porting from `hyperware_process_lib` to **axum** (Rust) on Fly.io, *or* a TypeScript rewrite on Hono running on Railway. The pure-math functions port cleanly either way.
+- **Persistence** — moving from Hyperware's local KV to Supabase (Postgres)
+- **API layer** — same REST surface, same response shapes — UI requires no changes beyond the base URL
+
+Live demo URL coming once the cutover ships.
+
+## Tech stack
+
+**Backend (current — Hyperware)**
+- Rust, WebAssembly (WASM), `hyperware_process_lib`, serde, `rust_decimal` for precise arithmetic
+
+**Frontend**
+- React 18, TypeScript, Zustand, Recharts, Vite
 
 ## Documentation
 
-- [API Reference](docs/API.md) - Complete REST API documentation
-- [Architecture](docs/ARCHITECTURE.md) - System design and data flow
-- [Setup Guide](docs/SETUP.md) - Installation and deployment
-- [Development Guide](docs/DEVELOPMENT.md) - Contributing and extending
-- [Changelog](CHANGELOG.md) - Version history and recent changes
+- [API Reference](docs/API.md) — REST API surface
+- [Architecture](docs/ARCHITECTURE.md) — system design and data flow
+- [Setup Guide](docs/SETUP.md) — running the legacy Hyperware build
+- [Development Guide](docs/DEVELOPMENT.md) — extending the codebase
+- [Changelog](CHANGELOG.md) — version history
 
-## Technology Stack
+## Running the legacy Hyperware build
 
-### Backend
-- **Rust** - Core application logic
-- **WebAssembly (WASM)** - Runs in Hyperware runtime
-- **hyperware_process_lib** - Hyperware process SDK
-- **serde** - Serialization/deserialization
-- **rust_decimal** - Precise decimal arithmetic
-- **url** - URL encoding for API queries
+> Kept here for reference; will be replaced when the standalone build lands.
 
-### Frontend
-- **React 18** - UI framework
-- **TypeScript** - Type safety
-- **Zustand** - State management
-- **Recharts** - Portfolio charts
-- **Vite** - Build tooling
-
-### APIs
-- CoinGecko API (requires API key)
-- DeFi Llama API (free, no key)
-- Dexscreener API (free, no key)
-- CryptoPanic Developer API v2 (API key included as fallback; can be overridden via config)
-- Moralis Web3 Data API (API key built-in)
-
-## Configuration
-
-### Package Capabilities
-
-The package requires the following Hyperware capabilities in `pkg/manifest.json`:
-
-```json
-{
-  "request_capabilities": [
-    "http-server:distro:sys",
-    "http-client:distro:sys",
-    "vfs:distro:sys"
-  ]
-}
-```
-
-**Important:** The `http-client:distro:sys` capability is required for fetching live prices from CoinGecko and other external APIs. Without it, all API calls will fail silently.
-
-### API Keys
-
-The CoinGecko API key is configured at runtime via the config endpoint:
+**Prerequisites**
+- [Hyperware Kit](https://github.com/hyperware-ai/kit)
+- Rust toolchain with `wasm32-wasip1` target
+- Node.js 18+
 
 ```bash
-# Set your API key
+kit build
+kit boot-fake-node
+kit start-package
+```
+
+App at `http://localhost:8080/smart-portfolio:smart-portfolio:template.os/`
+
+CoinGecko API key is set at runtime:
+```bash
 curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config \
   -H "Content-Type: application/json" \
   -d '{"api_key": "your-coingecko-api-key"}'
-
-# Verify configuration
-curl http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config
 ```
 
-The key is stored in persistent state and survives restarts.
-DeFi Llama and Dexscreener do not require API keys.
+## Privacy & security
 
-**CryptoPanic API Key** (optional): A built-in fallback key is included so news works immediately. To use your own key:
-
-```bash
-curl -X POST http://localhost:8080/smart-portfolio:smart-portfolio:template.os/api/config \
-  -H "Content-Type: application/json" \
-  -d '{"cryptopanic_api_key": "your-cryptopanic-api-key"}'
-```
-
-### HTTP Client Notes
-
-When making HTTP requests in Hyperware:
-- Use `hyperware_process_lib::http::client::send_request_await_response`
-- Timeout is specified in **milliseconds** (not seconds): use `30000` for 30 seconds
-- Use `req.query_params()` to access parsed query parameters from the request
-
-## Privacy
-
-Smart Portfolio is designed with privacy in mind:
-- **Local-first**: All data stored locally on your Hyperware node
-- **No tracking**: No analytics or telemetry
-- **Your keys, your data**: You control your portfolio information
-
-## Security
-
-The application includes several security hardening measures:
-- **Input Validation**: All user inputs are validated against maximum length limits
-- **CSV Export Safety**: Exports follow RFC 4180 with CSV injection prevention
-- **Canonical Identifiers**: Tokens are identified using a consistent format (`coingecko:<id>` or `address:<chain>:<addr>`) for reliable price lookups
-- **Price Cache TTL**: 60-second cache prevents excessive API calls while ensuring fresh data
-- **Risk Metrics Cache**: 60-second backend cache for risk analysis, eliminating 30 redundant HTTP requests per load
+- Local-first storage (Hyperware node KV; Supabase row-level-security in the migrated build)
+- No analytics or telemetry
+- Input validation on all user-supplied fields
+- CSV exports follow RFC 4180 with injection prevention
+- 60-second TTL on price + risk caches to bound API usage
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please read the [Development Guide](docs/DEVELOPMENT.md) before submitting PRs.
+MIT — see [LICENSE](LICENSE).
